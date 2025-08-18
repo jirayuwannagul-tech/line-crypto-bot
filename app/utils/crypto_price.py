@@ -1,17 +1,31 @@
 import httpx
 
-BINANCE_TICKER = "https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
+# สำรองหลายโดเมนของ Binance เผื่อบางตัวล่ม/ถูกบล็อก
+BINANCE_BASES = [
+    "https://api.binance.com",
+    "https://api1.binance.com",
+    "https://api2.binance.com",
+    "https://api3.binance.com",
+]
 
-# ฟังก์ชันหลัก: ใช้ได้กับทุกเหรียญ
 async def fetch_price(symbol: str) -> float:
     sym = symbol.upper()
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        r = await client.get(BINANCE_TICKER.format(symbol=sym))
-        r.raise_for_status()
-        data = r.json()
-        return float(data["price"])
+    last_err = None
+    for base in BINANCE_BASES:
+        url = f"{base}/api/v3/ticker/price"
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get(url, params={"symbol": sym})
+                r.raise_for_status()
+                data = r.json()
+                return float(data["price"])
+        except Exception as e:
+            last_err = e  # เก็บไว้เผื่อดีบัก แล้วลองตัวถัดไป
+            continue
+    # ทุกฐานล้มเหลว
+    raise RuntimeError(f"all binance endpoints failed: {last_err}")
 
-# ฟังก์ชันย่อย (คงชื่อเดิมไว้ให้โค้ดเก่าไม่พัง)
+# เผื่อโค้ดเก่ายังเรียกชื่อนี้อยู่
 async def fetch_btc_price() -> float:
     return await fetch_price("BTCUSDT")
 
