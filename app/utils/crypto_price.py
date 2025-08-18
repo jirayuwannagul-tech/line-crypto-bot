@@ -1,59 +1,100 @@
+# app/utils/crypto_price.py
+# ============================================
+# LAYER: PRICE FETCHER / ADAPTER (Coingecko-ready)
+# ============================================
+from __future__ import annotations
+from typing import Dict, Any, Optional, List
 import httpx
-import asyncio
-from app.config.symbols import COINGECKO_IDS
+import pandas as pd
 
-HEADERS = {"User-Agent": "line-crypto-bot/1.0 (+Render)"}
-_client: httpx.AsyncClient | None = None
+from app.config.symbols import resolve_symbol, is_supported
 
-async def _get_client() -> httpx.AsyncClient:
-    global _client
-    if _client is None:
-        _client = httpx.AsyncClient(
-            timeout=10.0,
-            headers=HEADERS,
-            follow_redirects=True,
-        )
-    return _client
+# ===== CONFIG / ENDPOINTS =====
+COINGECKO_BASE = "https://api.coingecko.com/api/v3"
+DEFAULT_VS = "usd"
 
-async def _coingecko_price(coin_id: str, retries: int = 3) -> float:
-    """
-    ดึงราคาจาก CoinGecko พร้อม retry/backoff
-    """
-    url = "https://api.coingecko.com/api/v3/simple/price"
-    c = await _get_client()
+__all__ = [
+    "fetch_spot",
+    "fetch_ohlcv",
+    "fetch_close_series",
+    "get_price_text",
+    "COINGECKO_BASE",
+    "DEFAULT_VS",
+]
 
-    for attempt in range(retries):
-        try:
-            r = await c.get(url, params={"ids": coin_id, "vs_currencies": "usd"})
+# ===== HTTP CLIENT =====
+def _http_get(url: str, params: Dict[str, Any]) -> Any:
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            r = client.get(url, params=params)
             r.raise_for_status()
-            data = r.json()
-            return float(data[coin_id]["usd"])
-        except httpx.HTTPStatusError as e:
-            # ถ้าเจอ 429 (rate limit) → หน่วงแล้วลองใหม่
-            if e.response.status_code == 429 and attempt < retries - 1:
-                wait_time = 2 ** attempt  # 1s, 2s, 4s
-                await asyncio.sleep(wait_time)
-                continue
-            raise
-        except Exception:
-            if attempt < retries - 1:
-                await asyncio.sleep(1)
-                continue
-            raise
+            return r.json()
+    except httpx.HTTPStatusError as e:
+        raise RuntimeError(f"HTTP {e.response.status_code} GET {url} params={params}") from e
+    except Exception as e:
+        raise RuntimeError(f"Request failed GET {url} params={params}") from e
 
-    raise RuntimeError(f"CoinGecko failed for {coin_id}")
-
-def _fmt(p: float) -> str:
-    return f"{p:,.2f}" if p >= 1 else f"{p:,.6f}"
-
-async def get_price_text(code: str) -> str:
+# ===== SPOT PRICE =====
+def fetch_spot(symbol_id: str, vs: str = DEFAULT_VS) -> Optional[float]:
     """
-    ดึงราคาจาก CoinGecko ตาม code เช่น BTC ETH XRP ...
+    ดึงราคา spot ปัจจุบันจาก /simple/price
+    รับ symbol_id รูปแบบ coingecko เช่น 'bitcoin'
+    คืน float หรือ None
     """
-    s = (code or "").upper().strip()
-    cid = COINGECKO_IDS.get(s)
-    if not cid:
-        raise RuntimeError(f"unsupported symbol: {s}")
+    url = f"{COINGECKO_BASE}/simple/price"
+    data = _http_get(url, {"ids": symbol_id, "vs_currencies": vs})
+    val = data.get(symbol_id, {}).get(vs)
+    return float(val) if val is not None else None
 
-    p = await _coingecko_price(cid)
-    return f"{s}/USD ~ {_fmt(p)}"
+# ===== OHLC =====
+def fetch_ohlcv(symbol_id: str, days: int = 1, vs: str = DEFAULT_VS) -> pd.DataFrame:
+    """
+    ดึงแท่งเทียนจาก /coins/{id}/ohlc
+    days รองรับ {1, 7, 14, 30, 90, 180, 365}
+    คืน DataFrame คอลัมน์: ['open','high','low','close','volume']
+    """
+    if days not in (1, 7, 14, 30, 90, 180, 365):
+        days = 1
+    url = f"{COINGECKO_BASE}/coins/{symbol_id}/ohlc"
+    raw = _http_get(url, {"vs_currency": vs, "days": days})
+    if not raw:
+        raise RuntimeError("Empty OHLC response")
+
+    df = pd.DataFrame(raw, columns=["ts", "open", "high", "low", "close"])
+    df["ts"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
+    df.set_index("ts", inplace=True)
+    df["volume"] = pd.NA  # Coingecko endpoint นี้ไม่ให้ volume
+    return df
+
+# ===== CLOSE SERIES (FALLBACK) =====
+def fetch_close_series(symbol_id: str, days: int = 1, vs: str = DEFAULT_VS) -> pd.DataFrame:
+    """
+    ดึงเส้นราคาปิดจาก /coins/{id}/market_chart → columns: ['close']
+    """
+    url = f"{COINGECKO_BASE}/coins/{symbol_id}/market_chart"
+    raw = _http_get(url, {"vs_currency": vs, "days": days})
+    prices: List[List[float]] = raw.get("prices", [])
+    if not prices:
+        raise RuntimeError("Empty market_chart.prices")
+
+    df = pd.DataFrame(prices, columns=["ts", "close"])
+    df["ts"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
+    df.set_index("ts", inplace=True)
+    return df
+
+# ===== HELPER FOR LINE WEBHOOK =====
+def get_price_text(symbol: str, vs: str = DEFAULT_VS) -> str:
+    """
+    รับ 'BTC' หรือ id โดยตรง → คืนสตริงสั้น ๆ พร้อมราคาเช่น 'BTC ~ 115,118.00 USD'
+    ใช้ resolve_symbol ถ้าเป็นตัวย่อ (BTC/ETH/…)
+    """
+    sym = symbol.upper().strip()
+    try:
+        symbol_id = resolve_symbol(sym) if is_supported(sym) else sym
+        price = fetch_spot(symbol_id, vs=vs)
+        if price is None:
+            return f"{sym} ~ N/A"
+        # แสดงทศนิยม 2 ตำแหน่ง (พอสำหรับข้อความสั้น ๆ)
+        return f"{sym} ~ {price:,.2f} {vs.upper()}"
+    except Exception:
+        return f"{sym} ~ N/A"
