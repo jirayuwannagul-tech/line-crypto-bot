@@ -1,33 +1,49 @@
 import httpx
 
-# สำรองหลายโดเมนของ Binance เผื่อบางตัวล่ม/ถูกบล็อก
-BINANCE_BASES = [
-    "https://api.binance.com",
-    "https://api1.binance.com",
-    "https://api2.binance.com",
-    "https://api3.binance.com",
-]
+# map สำหรับ CoinGecko (USD)
+COINGECKO_IDS = {
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+    "SOL": "solana",
+    "ETC": "ethereum-classic",
+    "ARB": "arbitrum",
+    "HBAR": "hedera",
+    "ADA": "cardano",
+    "DOGE": "dogecoin",
+    "SAND": "the-sandbox",
+}
 
-async def fetch_price(symbol: str) -> float:
-    sym = symbol.upper()
-    last_err = None
-    for base in BINANCE_BASES:
-        url = f"{base}/api/v3/ticker/price"
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                r = await client.get(url, params={"symbol": sym})
-                r.raise_for_status()
-                data = r.json()
-                return float(data["price"])
-        except Exception as e:
-            last_err = e  # เก็บไว้เผื่อดีบัก แล้วลองตัวถัดไป
-            continue
-    # ทุกฐานล้มเหลว
-    raise RuntimeError(f"all binance endpoints failed: {last_err}")
+HEADERS = {"User-Agent": "line-crypto-bot/1.0 (+Render)"}
+_client: httpx.AsyncClient | None = None
 
-# เผื่อโค้ดเก่ายังเรียกชื่อนี้อยู่
-async def fetch_btc_price() -> float:
-    return await fetch_price("BTCUSDT")
+async def _get_client() -> httpx.AsyncClient:
+    global _client
+    if _client is None:
+        _client = httpx.AsyncClient(
+            timeout=10.0,
+            headers=HEADERS,
+            follow_redirects=True,
+        )
+    return _client
 
-async def fetch_eth_price() -> float:
-    return await fetch_price("ETHUSDT")
+async def _coingecko_price(coin_id: str) -> float:
+    url = "https://api.coingecko.com/api/v3/simple/price"
+    c = await _get_client()
+    r = await c.get(url, params={"ids": coin_id, "vs_currencies": "usd"})
+    r.raise_for_status()
+    data = r.json()
+    return float(data[coin_id]["usd"])
+
+def _fmt(p: float) -> str:
+    return f"{p:,.2f}" if p >= 1 else f"{p:,.6f}"
+
+async def get_price_text(code: str) -> str:
+    """
+    ดึงราคาจาก CoinGecko เท่านั้น
+    """
+    s = (code or "").upper().strip()
+    cid = COINGECKO_IDS.get(s)
+    if cid:
+        p = await _coingecko_price(cid)
+        return f"{s}/USD ~ {_fmt(p)}"
+    raise RuntimeError("unsupported symbol")
