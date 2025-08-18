@@ -1,17 +1,6 @@
+# app/utils/crypto_price.py
 import httpx
-
-# map สำหรับ CoinGecko (USD)
-COINGECKO_IDS = {
-    "BTC": "bitcoin",
-    "ETH": "ethereum",
-    "SOL": "solana",
-    "ETC": "ethereum-classic",
-    "ARB": "arbitrum",
-    "HBAR": "hedera",
-    "ADA": "cardano",
-    "DOGE": "dogecoin",
-    "SAND": "the-sandbox",
-}
+from app.config.symbols import COINGECKO_IDS
 
 HEADERS = {"User-Agent": "line-crypto-bot/1.0 (+Render)"}
 _client: httpx.AsyncClient | None = None
@@ -39,11 +28,12 @@ def _fmt(p: float) -> str:
 
 async def get_price_text(code: str) -> str:
     """
-    ดึงราคาจาก CoinGecko เท่านั้น
+    ดึงราคาจาก CoinGecko ตาม code เช่น BTC ETH XRP ...
     """
     s = (code or "").upper().strip()
     cid = COINGECKO_IDS.get(s)
-    if cid:
-        p = await _coingecko_price(cid)
-        return f"{s}/USD ~ {_fmt(p)}"
-    raise RuntimeError("unsupported symbol")
+    if not cid:
+        raise RuntimeError(f"unsupported symbol: {s}")
+
+    p = await _coingecko_price(cid)
+    return f"{s}/USD ~ {_fmt(p)}"
