@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: line-crypto-bot
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: LINE_CHANNEL_SECRET
+        sync: false   # ใส่ค่าในแดชบอร์ด Render
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false   # ใส่ค่าในแดชบอร์ด Render
+      - key: ENV
+        value: production
