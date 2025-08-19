@@ -1,0 +1,108 @@
+# Strategy Profiles (ready-to-use)
+# ใช้กำหนดคอนฟิกกลยุทธ์และน้ำหนักอินดิเคเตอร์/แพทเทิร์น/ฟิลเตอร์
+# เลือกใช้โดย service/engine ตามชื่อ profile
+
+version: 1
+
+defaults:
+  use_ai: false            # เปิด/ปิด AI วิเคราะห์เสริมระดับโปรไฟล์
+  threshold:
+    bias_long: 0.60        # เกณฑ์ตัดสินใจฝั่ง Long
+    bias_short: 0.60       # เกณฑ์ตัดสินใจฝั่ง Short
+  indicators:
+    # ค่าเริ่มต้นความยาวต่าง ๆ (บางส่วน engine อาจไม่ใช้ทั้งหมดก็ได้)
+    sma_fast: 10
+    sma_slow: 30
+    ema_fast: 12
+    ema_slow: 26
+    rsi_length: 14
+    macd_fast: 12
+    macd_slow: 26
+    macd_signal: 9
+    bb_length: 20
+    bb_mult: 2.0
+    atr_length: 14
+  weights:
+    # น้ำหนักรวมไม่จำเป็นต้อง = 1.0 (engine จะ normalize เองได้)
+    rsi: 0.20
+    macd: 0.20
+    trend_ma: 0.25          # SMA/EMA slope/cross
+    bb_squeeze: 0.15
+    breakout: 0.20
+
+filters:
+  # เปิด/ปิด และพารามิเตอร์ของตัวกรองตลาด
+  trend:
+    enabled: true
+    min_strength: 0.5
+  volatility:
+    enabled: true
+    min_atr_pct: 0.005      # 0.5% ของราคา
+  session:
+    enabled: true
+    allowed: "24/7"         # asia|eu|us|24/7
+  volume:
+    enabled: false
+    min_multiple_of_avg: 1.0
+    lookback: 20
+
+profiles:
+
+  momentum_breakout:
+    description: "หาโมเมนตัมที่บีบแล้วเบรกด้วย RSI/MACD คอนเฟิร์ม"
+    use_ai: false
+    indicators:
+      sma_fast: 10
+      sma_slow: 30
+      rsi_length: 14
+      macd_fast: 12
+      macd_slow: 26
+      macd_signal: 9
+      bb_length: 20
+      bb_mult: 2.0
+      atr_length: 14
+    weights:
+      rsi: 0.20
+      macd: 0.20
+      trend_ma: 0.30
+      bb_squeeze: 0.15
+      breakout: 0.15
+    threshold:
+      bias_long: 0.60
+      bias_short: 0.60
+
+  trend_pullback:
+    description: "เข้าเทรนด์ระยะกลางเมื่อเกิดรีเทส EMA/VWAP แล้วเด้ง"
+    use_ai: false
+    indicators:
+      ema_fast: 20
+      ema_slow: 50
+      rsi_length: 14
+      atr_length: 14
+    weights:
+      trend_ma: 0.40
+      rsi: 0.20
+      macd: 0.15
+      breakout: 0.10
+      bb_squeeze: 0.15
+    threshold:
+      bias_long: 0.65
+      bias_short: 0.65
+
+  mean_reversion:
+    description: "ราคาเบี่ยงเบนจากค่าเฉลี่ย/แบนด์สูง คาดหวังเด้งกลับ"
+    use_ai: false
+    indicators:
+      bb_length: 20
+      bb_mult: 2.0
+      rsi_length: 14
+      atr_length: 14
+    weights:
+      bb_squeeze: 0.30
+      rsi: 0.30
+      trend_ma: 0.10
+      macd: 0.15
+      breakout: 0.15
+    threshold:
+      bias_long: 0.55
+      bias_short: 0.55

@@ -1,0 +1,71 @@
+# Risk Configuration (ready-to-use)
+version: 1
+
+account:
+  base_currency: USD
+  balance_mode: static        # static | dynamic (ถ้า dynamic ให้อัปเดตจาก portfolio ภายนอก)
+  starting_balance: 10000.0   # ใช้เป็นค่าอ้างอิงตอน backtest
+
+risk_per_trade:
+  r_percent: 1.0              # เสี่ยงต่อออเดอร์ (%) ของยอดพอร์ต
+  max_concurrent_positions: 3
+  max_daily_loss_percent: 5.0 # หยุดเทรดทั้งวันถ้าเกิน
+  max_weekly_loss_percent: 12.0
+
+reward:
+  rr: 1.5                     # ค่าเริ่มต้น TP = RR * ระยะ SL
+  partial_take_profit:
+    enabled: false
+    levels: []                # ตัวอย่าง: [{pct: 0.5, rr: 1.0}, {pct: 0.5, rr: 2.0}]
+
+stop_loss:
+  mode: atr                   # atr | fixed_pct | structure (swing)
+  atr:
+    length: 14
+    mult: 1.0                 # SL = entry ± ATR*mult
+  fixed_pct:
+    percent: 1.0              # ใช้เมื่อ mode=fixed_pct
+  structure:
+    swing_lookback: 10        # หา swing high/low ย้อนหลัง
+  trailing:
+    enabled: true
+    type: atr                 # atr | percent
+    atr_mult: 1.0
+    percent: 1.0              # ใช้เมื่อ type=percent
+    step_lock: true           # ขยับแล้วไม่ถอยลง
+
+position_sizing:
+  method: risk_percent        # risk_percent | fixed_size | notional_usd
+  fixed_size:
+    qty: 1.0
+  notional_usd:
+    amount: 500.0
+  min_position_notional: 50.0
+  max_position_notional: 3000.0
+  pyramiding:
+    enabled: false
+    max_adds: 2
+    add_trigger_rr: 1.0       # เพิ่มเมื่อกำไรถึง RR ที่กำหนด
+
+execution:
+  slippage_bps: 5             # 1 bps = 0.01%
+  taker_fee_bps: 7
+  maker_fee_bps: 2
+  leverage:
+    enabled: false
+    max_leverage: 3
+
+hygiene:
+  cooldown_sec: 30
+  no_flip_until_exit: true
+  session_limit:
+    enabled: false
+    allowed: "24/7"           # asia | eu | us | 24/7
+
+alerts:
+  move_thresholds_pct: [1.0, 2.0]   # แจ้งเตือนเมื่อขยับ ±1%, ±2%
+  throttle_sec: 60
+
+time_exit:
+  enabled: false
+  max_bars_hold: 300          # ออกจากสถานะเมื่อครบจำนวนแท่ง
