@@ -3,6 +3,7 @@
 # LAYER: UTILS / DATA PROVIDER
 #   - ดึงข้อมูลราคา OHLCV จาก CoinGecko (หรือ provider อื่น)
 #   - คืนค่าเป็น pandas DataFrame ที่มีคอลัมน์: open, high, low, close, volume
+#   - มีฟังก์ชัน get_price_text สำหรับส่งข้อความราคาล่าสุด
 # =============================================================================
 
 import httpx
@@ -43,3 +44,21 @@ async def fetch_ohlcv(symbol: str, days: int = 1, interval: str = "hourly") -> p
 
     df = pd.DataFrame(ohlc)
     return df
+
+
+async def get_price_text(symbol: str) -> str:
+    """
+    คืนข้อความราคาล่าสุดของเหรียญที่ต้องการ เช่น "BTC ล่าสุด $29,xxx"
+    """
+    url = f"https://api.coingecko.com/api/v3/simple/price"
+    params = {"ids": symbol.lower(), "vs_currencies": "usd"}
+
+    async with httpx.AsyncClient() as client:
+        r = await client.get(url, params=params)
+        r.raise_for_status()
+        data = r.json()
+
+    price = data.get(symbol.lower(), {}).get("usd")
+    if price is None:
+        return f"❌ ไม่พบข้อมูลราคา {symbol.upper()}"
+    return f"💰 ราคา {symbol.upper()} ล่าสุด: ${price:,.2f} USD"
