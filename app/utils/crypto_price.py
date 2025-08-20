@@ -1,6 +1,8 @@
 # app/utils/crypto_price.py
-# รองรับทุกเหรียญ: ดึง /coins/list แล้วแม็ป symbol → ids (แก้ชนด้วย market cap)
+# รองรับ "ทุกเหรียญ" จาก CoinGecko + แคช + retry + resolve ซ้ำชื่อด้วย market cap
+
 import time
+import asyncio
 from typing import Dict, List, Optional
 import httpx
 
@@ -35,19 +37,17 @@ class SymbolResolver:
         self._last_loaded = time.time()
 
     async def resolve_id(self, symbol: str) -> Optional[str]:
-        """
-        คืนค่า coin_id จาก symbol (ไม่สนตัวพิมพ์)
-        ถ้าชนหลาย id → เลือกตัวที่ market cap สูงสุด
-        """
+        """คืนค่า coin_id จาก symbol (ไม่สนตัวพิมพ์)
+        ถ้าชนหลาย id → เลือกตัวที่ market cap สูงสุด"""
         await self.refresh()
         ids = self._symbol_map.get(symbol.lower())
         if not ids:
             return None
         if len(ids) == 1:
             return ids[0]
-        # ชนหลายตัว: เลือก market cap สูงสุด
-        # ใช้ /coins/markets?ids=...&vs_currency=usd
-        ids_param = ",".join(ids[:250])  # safety guard
+
+        # ชนหลายตัว → เรียก /coins/markets แล้วเลือก market cap สูงสุด
+        ids_param = ",".join(ids[:250])
         url = f"{COINGECKO_BASE}/coins/markets?vs_currency=usd&ids={ids_param}"
         async with httpx.AsyncClient(timeout=20) as client:
             r = await client.get(url)
@@ -60,19 +60,26 @@ class SymbolResolver:
 
 resolver = SymbolResolver()
 
-# ----- ราคา + แคชสั้นๆ -----
+# ---- ราคา + แคชสั้น ๆ + retry ----
 _price_cache: Dict[str, Dict[str, float]] = {}  # coin_id -> {"price": float, "ts": epoch}
 
 async def _fetch_price_usd(coin_id: str) -> Optional[float]:
     url = f"{COINGECKO_BASE}/simple/price?ids={coin_id}&vs_currencies=usd"
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.get(url)
-        r.raise_for_status()
-        data = r.json()
-    row = data.get(coin_id)
-    if not row or "usd" not in row:
-        return None
-    return float(row["usd"])
+    for attempt in range(3):  # retry 3 ครั้ง
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                r = await client.get(url)
+                r.raise_for_status()
+                data = r.json()
+            row = data.get(coin_id)
+            if row and "usd" in row:
+                return float(row["usd"])
+        except Exception:
+            if attempt < 2:
+                await asyncio.sleep(0.4 * (attempt + 1))
+            else:
+                raise
+    return None
 
 async def get_price_usd(symbol: str) -> Optional[float]:
     coin_id = await resolver.resolve_id(symbol)

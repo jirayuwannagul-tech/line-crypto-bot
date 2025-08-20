@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from app.routers import chat_router, health_router, line_router
 from app.utils.logging import setup_logging
 from app.utils.settings import settings
+from app.utils.crypto_price import resolver  # 👈 warm-up resolver
 
 # =========================
 # LAYER: CONFIG & LOGGING
@@ -21,6 +22,11 @@ def create_app() -> FastAPI:
     return app
 
 app = create_app()
+
+# 👇 อุ่นเครื่องลิสต์เหรียญตอนสตาร์ท (ลดพังรอบแรก)
+@app.on_event("startup")
+async def warmup():
+    await resolver.refresh(force=True)
 
 # =========================
 # LAYER: ROOT ROUTE
