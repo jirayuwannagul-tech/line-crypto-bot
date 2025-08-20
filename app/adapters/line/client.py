@@ -1,18 +1,34 @@
-import base64, hashlib, hmac, logging
-from typing import Any
+# app/adapters/line/client.py
+import os
 import httpx
-from app.utils.settings import settings
-logger = logging.getLogger(__name__)
-LINE_REPLY_ENDPOINT = "https://api.line.me/v2/bot/message/reply"
-def verify_signature(channel_secret: str, body_bytes: bytes, x_line_signature: str) -> bool:
-    mac = hmac.new(channel_secret.encode("utf-8"), body_bytes, hashlib.sha256).digest()
-    calc = base64.b64encode(mac).decode("utf-8")
-    return hmac.compare_digest(calc, x_line_signature)
-async def reply_message(reply_token: str, messages: list[dict[str, Any]]) -> None:
-    headers = {"Authorization": f"Bearer {settings.LINE_CHANNEL_ACCESS_TOKEN}", "Content-Type": "application/json"}
-    payload = {"replyToken": reply_token, "messages": messages}
+
+# โหลดค่า Secret และ Token จาก Environment Variables
+LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "5ff2d689dc8f9c4ac7d45a5a20ce11c3")
+LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "mM52D20uS9a26xlYyiptXflTHGSb4Oo/y1KAJiEZb34SRxxNjICQFUaFgQevtDT9xnoOLHRevaI9g3sxhNpQlyW5Xkdhw51/jwVAVoPGhoEfc85BqWYXrtvSP1kVVD1cqZQEBM2/cdOpiWI1j2q4JAdB04t89/1O/w1cDnyilFU=")
+
+LINE_API_REPLY_URL = "https://api.line.me/v2/bot/message/reply"
+
+
+async def reply_message(reply_token: str, messages: list):
+    """
+    ส่งข้อความกลับไปยังผู้ใช้ผ่าน LINE Messaging API
+
+    :param reply_token: token ที่ LINE ส่งมาใน event
+    :param messages: list ของ dict เช่น [{"type": "text", "text": "hello"}]
+    """
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"
+    }
+    body = {
+        "replyToken": reply_token,
+        "messages": messages
+    }
+
     async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.post(LINE_REPLY_ENDPOINT, headers=headers, json=payload)
-        if r.status_code >= 300:
-            logger.error("LINE reply error %s: %s", r.status_code, r.text)
-            raise RuntimeError(f"LINE reply failed: {r.status_code}")
+        response = await client.post(LINE_API_REPLY_URL, headers=headers, json=body)
+
+    if response.status_code != 200:
+        print("❌ LINE reply error:", response.text)
+    else:
+        print("✅ Message sent to LINE:", body)
