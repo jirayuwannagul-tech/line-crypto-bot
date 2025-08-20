@@ -1,28 +1,24 @@
-# app/routers/chat.py
-# =============================================================================
-# LAYER: ROUTER
-#   - API endpoint สำหรับทดสอบเรียก SignalEngine
-#   - ผู้ใช้สามารถส่ง symbol → engine → ได้สัญญาณตอบกลับ
-# =============================================================================
+# app/routers/chat.py (ตัวอย่างการเรียก)
+from fastapi import APIRouter, Request
+from app.utils.crypto_price import get_price_text
 
-from fastapi import APIRouter, Query
-from typing import Optional
-from app.services.signal_engine import SignalEngineService
-from app.utils.crypto_price import fetch_ohlcv
-from app.schemas.signal import SignalResponse
+router = APIRouter()
 
-router = APIRouter(prefix="/chat", tags=["chat"])
-service = SignalEngineService()
+@router.post("/webhook")
+async def webhook_handler(req: Request):
+    body = await req.json()
+    text = str(body.get("message", {}).get("text", "")).strip()
 
+    t = text.lower()
+    if t.startswith("ราคา "):
+        symbol = t.replace("ราคา", "", 1).strip().upper()
+        reply = await get_price_text(symbol)
+        # TODO: ส่ง reply ผ่าน LINE SDK/adapter ของคุณ
+        return {"reply": reply}
 
-@router.get("/signal", response_model=SignalResponse)
-async def get_signal(
-    symbol: str = Query(..., description="Crypto symbol เช่น BTC, ETH"),
-    use_ai: bool = Query(False, description="เปิดใช้ AI วิเคราะห์เพิ่มหรือไม่"),
-):
-    """
-    ดึงข้อมูล OHLCV → ส่งเข้า SignalEngine → คืนผลลัพธ์สัญญาณ
-    """
-    df = await fetch_ohlcv(symbol)
-    result = await service.analyze_symbol(symbol, ohlcv=df, use_ai=use_ai)
-    return result
+    if t.endswith(" ราคา"):
+        symbol = t.replace("ราคา", "", 1).strip().upper()
+        reply = await get_price_text(symbol)
+        return {"reply": reply}
+
+    return {"reply": "พิมพ์: ราคา BTC | ราคา ETH | …"}

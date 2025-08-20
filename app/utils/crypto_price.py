@@ -1,64 +1,94 @@
 # app/utils/crypto_price.py
-# =============================================================================
-# LAYER: UTILS / DATA PROVIDER
-#   - ดึงข้อมูลราคา OHLCV จาก CoinGecko (หรือ provider อื่น)
-#   - คืนค่าเป็น pandas DataFrame ที่มีคอลัมน์: open, high, low, close, volume
-#   - มีฟังก์ชัน get_price_text สำหรับส่งข้อความราคาล่าสุด
-# =============================================================================
-
+# รองรับทุกเหรียญ: ดึง /coins/list แล้วแม็ป symbol → ids (แก้ชนด้วย market cap)
+import time
+from typing import Dict, List, Optional
 import httpx
-import pandas as pd
-from datetime import datetime, timezone
 
+COINGECKO_BASE = "https://api.coingecko.com/api/v3"
+SYMBOL_TTL_SEC = 6 * 60 * 60     # 6 ชั่วโมง
+PRICE_TTL_SEC  = 10              # 10 วินาที
 
-async def fetch_ohlcv(symbol: str, days: int = 1, interval: str = "hourly") -> pd.DataFrame:
-    """
-    ดึงข้อมูล OHLCV จาก CoinGecko
-    :param symbol: เช่น BTC, ETH
-    :param days: จำนวนวันที่ต้องการ (1 = 24 ชั่วโมงย้อนหลัง)
-    :param interval: "hourly" หรือ "daily"
-    """
-    url = f"https://api.coingecko.com/api/v3/coins/{symbol.lower()}/market_chart"
-    params = {"vs_currency": "usd", "days": days, "interval": interval}
+class SymbolResolver:
+    def __init__(self):
+        self._symbol_map: Dict[str, List[str]] = {}   # "btc" -> ["bitcoin"]
+        self._last_loaded: float = 0.0
 
-    async with httpx.AsyncClient() as client:
-        r = await client.get(url, params=params)
+    async def _fetch_all_coins(self) -> List[dict]:
+        url = f"{COINGECKO_BASE}/coins/list?include_platform=false"
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.get(url)
+            r.raise_for_status()
+            return r.json()
+
+    async def refresh(self, force: bool = False):
+        if not force and (time.time() - self._last_loaded) < SYMBOL_TTL_SEC:
+            return
+        coins = await self._fetch_all_coins()
+        m: Dict[str, List[str]] = {}
+        for c in coins:
+            sym = str(c.get("symbol", "")).lower().strip()
+            cid = str(c.get("id", "")).strip()
+            if not sym or not cid:
+                continue
+            m.setdefault(sym, []).append(cid)
+        self._symbol_map = m
+        self._last_loaded = time.time()
+
+    async def resolve_id(self, symbol: str) -> Optional[str]:
+        """
+        คืนค่า coin_id จาก symbol (ไม่สนตัวพิมพ์)
+        ถ้าชนหลาย id → เลือกตัวที่ market cap สูงสุด
+        """
+        await self.refresh()
+        ids = self._symbol_map.get(symbol.lower())
+        if not ids:
+            return None
+        if len(ids) == 1:
+            return ids[0]
+        # ชนหลายตัว: เลือก market cap สูงสุด
+        # ใช้ /coins/markets?ids=...&vs_currency=usd
+        ids_param = ",".join(ids[:250])  # safety guard
+        url = f"{COINGECKO_BASE}/coins/markets?vs_currency=usd&ids={ids_param}"
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.get(url)
+            r.raise_for_status()
+            data = r.json()
+        if not data:
+            return ids[0]
+        data.sort(key=lambda x: (x.get("market_cap") or 0), reverse=True)
+        return data[0].get("id")
+
+resolver = SymbolResolver()
+
+# ----- ราคา + แคชสั้นๆ -----
+_price_cache: Dict[str, Dict[str, float]] = {}  # coin_id -> {"price": float, "ts": epoch}
+
+async def _fetch_price_usd(coin_id: str) -> Optional[float]:
+    url = f"{COINGECKO_BASE}/simple/price?ids={coin_id}&vs_currencies=usd"
+    async with httpx.AsyncClient(timeout=15) as client:
+        r = await client.get(url)
         r.raise_for_status()
         data = r.json()
+    row = data.get(coin_id)
+    if not row or "usd" not in row:
+        return None
+    return float(row["usd"])
 
-    prices = data.get("prices", [])
-    ohlc = []
-    for p in prices:
-        ts = datetime.fromtimestamp(p[0] / 1000, tz=timezone.utc)
-        price = p[1]
-        ohlc.append(
-            {
-                "time": ts,
-                "open": price,
-                "high": price,
-                "low": price,
-                "close": price,
-                "volume": 0.0,  # CoinGecko ไม่มี volume แยกใน endpoint นี้
-            }
-        )
-
-    df = pd.DataFrame(ohlc)
-    return df
-
+async def get_price_usd(symbol: str) -> Optional[float]:
+    coin_id = await resolver.resolve_id(symbol)
+    if not coin_id:
+        return None
+    now = time.time()
+    node = _price_cache.get(coin_id)
+    if node and (now - node["ts"] < PRICE_TTL_SEC):
+        return node["price"]
+    price = await _fetch_price_usd(coin_id)
+    if price is not None:
+        _price_cache[coin_id] = {"price": price, "ts": now}
+    return price
 
 async def get_price_text(symbol: str) -> str:
-    """
-    คืนข้อความราคาล่าสุดของเหรียญที่ต้องการ เช่น "BTC ล่าสุด $29,xxx"
-    """
-    url = f"https://api.coingecko.com/api/v3/simple/price"
-    params = {"ids": symbol.lower(), "vs_currencies": "usd"}
-
-    async with httpx.AsyncClient() as client:
-        r = await client.get(url, params=params)
-        r.raise_for_status()
-        data = r.json()
-
-    price = data.get(symbol.lower(), {}).get("usd")
+    price = await get_price_usd(symbol)
     if price is None:
-        return f"❌ ไม่พบข้อมูลราคา {symbol.upper()}"
-    return f"💰 ราคา {symbol.upper()} ล่าสุด: ${price:,.2f} USD"
+        return f"❌ ไม่พบเหรียญ '{symbol.upper()}' บน CoinGecko"
+    return f"💰 ราคา {symbol.upper()} ล่าสุด: {price:,.2f} USD"
