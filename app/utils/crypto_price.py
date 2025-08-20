@@ -27,6 +27,7 @@ class SymbolResolver:
             return r.json()
 
     async def refresh(self, force: bool = False):
+        """โหลด symbol map ใหม่ (ทุก 6 ชั่วโมง)"""
         if not force and (time.time() - self._last_loaded) < SYMBOL_TTL_SEC:
             return
         coins = await self._fetch_all_coins()
@@ -61,6 +62,7 @@ class SymbolResolver:
         data.sort(key=lambda x: (x.get("market_cap") or 0), reverse=True)
         return data[0].get("id")
 
+# สร้าง resolver global
 resolver = SymbolResolver()
 
 # ===== ราคา + แคช + retry =====
@@ -85,6 +87,7 @@ async def _fetch_price_usd(coin_id: str) -> Optional[float]:
     return None
 
 async def get_price_usd(symbol: str) -> Optional[float]:
+    """คืนค่า float ราคา USD ของเหรียญตาม symbol (BTC, ETH, ฯลฯ)"""
     coin_id = await resolver.resolve_id(symbol)
     if not coin_id:
         return None
@@ -112,6 +115,7 @@ def _format_price_auto(price: float) -> str:
     return f"{price:,.8f}"
 
 async def get_price_text(symbol: str) -> str:
+    """คืนค่า string พร้อม emoji ใช้ตอบใน LINE"""
     price = await get_price_usd(symbol)
     if price is None:
         return f"❌ ไม่พบเหรียญ '{symbol.upper()}' บน CoinGecko"

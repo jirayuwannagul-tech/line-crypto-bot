@@ -1,4 +1,3 @@
-# app/routers/line_webhook.py
 import json
 import logging
 import re
@@ -12,14 +11,12 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 # ทางลัด: พิมพ์สั้น ๆ แค่สัญลักษณ์ (กันสแปมข้อความทั่วไป)
-WHITELIST = {"BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "AVAX", "DOT", "TON"}
+WHITELIST = {"BTC","ETH","SOL","BNB","XRP","ADA","DOGE","AVAX","DOT","TON"}
 GREETINGS = {"สวัสดี", "ดีดี", "ดีจ้า", "hello", "hi"}
-
 
 @router.get("/webhook")
 def webhook_verify():
     return {"status": "ok"}
-
 
 @router.post("/webhook")
 async def line_webhook(
@@ -56,48 +53,48 @@ async def line_webhook(
         text = (ev.get("message", {}).get("text") or "").strip()
         upper = text.upper()
 
-        # ---------- "ราคา <SYMBOL>" (รองรับทุกเหรียญ) ----------
+        # ---------- "ราคา <SYMBOL>" ----------
         m = re.search(r"ราคา\s+([A-Za-z0-9._\-]+)", text, flags=re.IGNORECASE)
         if m:
             sym = m.group(1).upper()
             try:
-                msg = await get_price_text(sym)   # ✅ async call
+                msg = get_price_text(sym)
             except Exception as e:
                 logger.exception("price fetch failed: %s", e)
                 msg = f"ดึงราคา {sym} ไม่สำเร็จ ลองใหม่ครับ 🙏"
-            await reply_message(reply_token, [{"type": "text", "text": msg}])  # ✅ async call
+            reply_message(reply_token, [{"type": "text", "text": msg}])
             continue
 
-        # ---------- กันเคสขึ้นต้น "ราคา" แต่ช่องว่างเพี้ยน ----------
+        # ---------- กันเคสขึ้นต้น "ราคา" ----------
         if text.lower().startswith("ราคา"):
             parts = text.split()
             if len(parts) >= 2:
                 sym = parts[-1].upper()
                 try:
-                    msg = await get_price_text(sym)
+                    msg = get_price_text(sym)
                 except Exception as e:
                     logger.exception("price fetch failed: %s", e)
                     msg = f"ดึงราคา {sym} ไม่สำเร็จ ลองใหม่ครับ 🙏"
-                await reply_message(reply_token, [{"type": "text", "text": msg}])
+                reply_message(reply_token, [{"type": "text", "text": msg}])
                 continue
 
-        # ---------- พิมพ์สั้น ๆ แค่สัญลักษณ์ (whitelist) ----------
+        # ---------- พิมพ์สั้น ๆ ----------
         if upper in WHITELIST:
             try:
-                msg = await get_price_text(upper)
+                msg = get_price_text(upper)
             except Exception as e:
                 logger.exception("price fetch failed: %s", e)
                 msg = f"ดึงราคา {upper} ไม่สำเร็จ ลองใหม่ครับ 🙏"
-            await reply_message(reply_token, [{"type": "text", "text": msg}])
+            reply_message(reply_token, [{"type": "text", "text": msg}])
             continue
 
         # ---------- ทักทาย ----------
         if text.strip().lower() in {g.lower() for g in GREETINGS}:
-            await reply_message(reply_token, [{"type": "text", "text": "สวัสดีครับ 🙏"}])
+            reply_message(reply_token, [{"type": "text", "text": "สวัสดีครับ 🙏"}])
             continue
 
         # ---------- default help ----------
         help_msg = "พิมพ์: ราคา BTC | ราคา ETH | ราคา SOL (รองรับทุกเหรียญบน CoinGecko)"
-        await reply_message(reply_token, [{"type": "text", "text": help_msg}])
+        reply_message(reply_token, [{"type": "text", "text": help_msg}])
 
     return {"status": "ok", "events": len(events)}
