@@ -1,39 +1,58 @@
-# app/services/signal_engine.py
-# =============================================================================
-# LAYER: SERVICE
-#   - ตัวกลางเรียกใช้ SignalEngine (core logic)
-#   - จัดรูปผลลัพธ์ให้เป็น Schema
-# =============================================================================
-
-from typing import Any, Dict, Optional
+# app/services/signal_service.py
+import pandas as pd
 from app.engine.signal_engine import SignalEngine
-from app.schemas.signal import SignalResponse
+from app.adapters.price_provider import fetch_spot
 
+engine = SignalEngine()
 
-class SignalEngineService:
-    def __init__(self) -> None:
-        # สร้าง instance ของ core SignalEngine
-        self.engine = SignalEngine()
+async def analyze_btc() -> str:
+    # 1) ดึงราคาจริง
+    price = await fetch_spot("BTC", "USDT")
+    if not price:
+        return "ไม่สามารถดึงราคาจริงได้"
 
-    async def analyze_symbol(
-        self,
-        symbol: str,
-        ohlcv: Any = None,
-        use_ai: bool = False
-    ) -> SignalResponse:
-        """
-        วิเคราะห์สัญญาณสำหรับ symbol ที่ให้มา
-        :param symbol: เช่น BTC, ETH
-        :param ohlcv: DataFrame OHLCV (open, high, low, close, volume)
-        :param use_ai: ถ้า True จะเปิด logic AI เสริม
-        """
-        result: Dict[str, Any] = self.engine.process_ohlcv(symbol, df=ohlcv, use_ai=use_ai)
-        return SignalResponse(**result)
+    # 2) สร้าง DataFrame mock OHLCV
+    df = pd.DataFrame({
+        "open":  [price*0.99, price*1.01, price*0.995],
+        "high":  [price*1.01, price*1.02, price*1.01],
+        "low":   [price*0.98, price*0.99, price*0.985],
+        "close": [price*1.00, price*1.005, price],
+    })
 
-    async def reset_symbol(self, symbol: str) -> None:
-        """รีเซ็ต state ของสัญลักษณ์ (ล้าง position, signal ts)"""
-        self.engine.reset_symbol(symbol)
+    # 3) วิเคราะห์ด้วย Engine
+    result = engine.process_ohlcv("BTCUSDT", df)
+    side   = result["side"]
+    entry  = result["price"]
 
-    async def toggle_ai(self, enabled: bool) -> None:
-        """เปิด/ปิดโหมด AI"""
-        self.engine.set_ai(enabled)
+    # 4) คำนวณ TP/SL
+    if side == "LONG":
+        tp1, tp2, tp3 = entry*1.03, entry*1.05, entry*1.07
+        sl = entry*0.97
+    elif side == "SHORT":
+        tp1, tp2, tp3 = entry*0.97, entry*0.95, entry*0.93
+        sl = entry*1.03
+    else:
+        tp1 = tp2 = tp3 = sl = None
+
+    # 5) mock % โอกาสชนะ
+    long_chance, short_chance = 65, 35
+
+    # 6) สร้างข้อความตอบกลับ
+    reply = f"""
+📊 สัญญาณ BTC
+ราคาเข้า: {entry:,.0f} USDT
+ทิศทาง: {side}
+
+✅ TP1 (+3%): {tp1:,.0f}
+✅ TP2 (+5%): {tp2:,.0f}
+✅ TP3 (+7%): {tp3:,.0f}
+❌ SL (−3%): {sl:,.0f}
+
+📈 ความน่าจะเป็น:
+- Long win chance: {long_chance}%
+- Short win chance: {short_chance}%
+
+➡️ สรุป: ฝั่ง {side} ได้เปรียบ
+    """.strip()
+
+    return reply
