@@ -1,34 +1,64 @@
-# app/adapters/line/client.py
 import os
+import re
+import logging
 import httpx
 
-# โหลดค่า Secret และ Token จาก Environment Variables
-LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "5ff2d689dc8f9c4ac7d45a5a20ce11c3")
-LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "mM52D20uS9a26xlYyiptXflTHGSb4Oo/y1KAJiEZb34SRxxNjICQFUaFgQevtDT9xnoOLHRevaI9g3sxhNpQlyW5Xkdhw51/jwVAVoPGhoEfc85BqWYXrtvSP1kVVD1cqZQEBM2/cdOpiWI1j2q4JAdB04t89/1O/w1cDnyilFU=")
+logger = logging.getLogger(__name__)
 
-LINE_API_REPLY_URL = "https://api.line.me/v2/bot/message/reply"
+LINE_API_BASE = "https://api.line.me/v2/bot"
+LINE_API_REPLY = f"{LINE_API_BASE}/message/reply"
+LINE_API_PUSH = f"{LINE_API_BASE}/message/push"
+LINE_API_BROADCAST = f"{LINE_API_BASE}/message/broadcast"
 
+# --- remove only invisible BOM/zero-width chars; don't mutate valid tokens ---
+_INVISIBLES = ["\u200b", "\u200c", "\u200d", "\ufeff"]
 
-async def reply_message(reply_token: str, messages: list):
-    """
-    ส่งข้อความกลับไปยังผู้ใช้ผ่าน LINE Messaging API
+def _clean_invisible(raw: str | None) -> str:
+    if not raw:
+        return ""
+    s = raw.strip()
+    for ch in _INVISIBLES:
+        s = s.replace(ch, "")
+    return s
 
-    :param reply_token: token ที่ LINE ส่งมาใน event
-    :param messages: list ของ dict เช่น [{"type": "text", "text": "hello"}]
-    """
-    headers = {
+def _validate_token(tok: str) -> bool:
+    # LINE access token is base64-like
+    return bool(re.fullmatch(r"[A-Za-z0-9+\-_/=\.~]+", tok))
+
+LINE_CHANNEL_ACCESS_TOKEN = _clean_invisible(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
+
+if not LINE_CHANNEL_ACCESS_TOKEN:
+    logger.error("LINE_CHANNEL_ACCESS_TOKEN is missing (ENV not set)")
+elif not _validate_token(LINE_CHANNEL_ACCESS_TOKEN):
+    bad = [hex(ord(c)) for c in LINE_CHANNEL_ACCESS_TOKEN if not re.fullmatch(r"[A-Za-z0-9+\-_/=\.~]", c)]
+    logger.error("LINE_CHANNEL_ACCESS_TOKEN contains invalid chars: %s", bad)
+
+def _auth_headers() -> dict:
+    if not LINE_CHANNEL_ACCESS_TOKEN:
+        raise RuntimeError("LINE_CHANNEL_ACCESS_TOKEN is not set")
+    return {
+        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"
-    }
-    body = {
-        "replyToken": reply_token,
-        "messages": messages
     }
 
+async def _post(url: str, payload: dict) -> dict:
+    headers = _auth_headers()
     async with httpx.AsyncClient(timeout=10) as client:
-        response = await client.post(LINE_API_REPLY_URL, headers=headers, json=body)
+        resp = await client.post(url, headers=headers, json=payload)
+    if resp.status_code == 401:
+        raise RuntimeError(f"LINE 401 Authentication failed. Resp={resp.text}")
+    if resp.is_error:
+        raise RuntimeError(f"LINE API error {resp.status_code}: {resp.text}")
+    return resp.json() if resp.text else {}
 
-    if response.status_code != 200:
-        print("❌ LINE reply error:", response.text)
-    else:
-        print("✅ Message sent to LINE:", body)
+async def reply_message(reply_token: str, messages: list[dict]) -> None:
+    payload = {"replyToken": reply_token, "messages": messages}
+    await _post(LINE_API_REPLY, payload)
+
+async def push_message(user_id: str, messages: list[dict]) -> None:
+    payload = {"to": user_id, "messages": messages}
+    await _post(LINE_API_PUSH, payload)
+
+async def broadcast_message(messages: list[dict]) -> None:
+    payload = {"messages": messages}
+    await _post(LINE_API_BROADCAST, payload)
