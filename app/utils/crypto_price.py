@@ -5,13 +5,11 @@ import asyncio
 import httpx
 from typing import Optional, Dict, Tuple
 
-# ====== ENV & DEFAULTS ======
-_DEFAULT_VS = os.getenv("QUOTE_ASSET", "USDT").upper()    # ตัวเงินอ้างอิง
+_DEFAULT_VS = os.getenv("QUOTE_ASSET", "USDT").upper()
 _PROVIDER   = os.getenv("PRICE_PROVIDER", "binance").lower()  # binance|coingecko
-_PRICE_TTL  = int(os.getenv("PRICE_TTL_SECONDS", "15"))   # cache ราคา (วินาที)
+_PRICE_TTL  = int(os.getenv("PRICE_TTL_SECONDS", "15"))
 
-# ====== SIMPLE IN-MEMORY CACHE ======
-_price_cache: Dict[str, Tuple[float, float]] = {}  # key -> (price, ts)
+_price_cache: Dict[str, Tuple[float, float]] = {}
 
 def _cache_key(symbol: str, vs: str) -> str:
     return f"{symbol.upper()}-{vs.upper()}"
@@ -30,7 +28,6 @@ def _set_cache(symbol: str, vs: str, price: float) -> None:
     key = _cache_key(symbol, vs)
     _price_cache[key] = (price, time.time())
 
-# ====== HTTP helper (retry/backoff) ======
 async def _http_get_with_retry(
     url: str,
     params: dict | None = None,
@@ -46,11 +43,11 @@ async def _http_get_with_retry(
                 return r.json()
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
+            # retry เฉพาะ 429
             if status == 429 and attempt < retries - 1:
                 await asyncio.sleep(backoff * (2 ** attempt))
                 continue
-            if status in (400, 404):
-                raise
+            # ส่งต่อให้ caller ตัดสินใจ (รวมถึง 451/403)
             raise
         except httpx.RequestError:
             if attempt < retries - 1:
@@ -58,11 +55,11 @@ async def _http_get_with_retry(
                 continue
             raise
 
-# ====== PROVIDERS ======
+# ---------- Providers ----------
 async def _get_price_binance(symbol: str, vs: str) -> Optional[float]:
     """
-    Binance Public API: https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT
-    รองรับเฉพาะคู่ที่มีบน Binance
+    Binance: https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT
+    หมายเหตุ: บาง region/IP จะโดน 451/403
     """
     pair = f"{symbol.upper()}{vs.upper()}"
     url = "https://api.binance.com/api/v3/ticker/price"
@@ -70,14 +67,14 @@ async def _get_price_binance(symbol: str, vs: str) -> Optional[float]:
         data = await _http_get_with_retry(url, params={"symbol": pair})
         return float(data["price"])
     except httpx.HTTPStatusError as e:
-        if e.response.status_code in (400, 404):
+        status = e.response.status_code
+        # ถ้าโดน block/geo (451) หรือ forbidden (403) หรือไม่รองรับคู่ (400/404) ให้ fallback
+        if status in (400, 403, 404, 451):
             return None
+        # อย่างอื่นค่อยโยนต่อ
         raise
 
 async def _get_price_coingecko(symbol: str, vs: str) -> Optional[float]:
-    """
-    CoinGecko: ใช้เป็น fallback เพื่อลดโอกาสโดนลิมิต
-    """
     vs_currency = "usd" if vs.upper() in ("USD", "USDT") else vs.lower()
     SYMBOL_MAP = {
         "BTC": "bitcoin",
@@ -103,11 +100,8 @@ async def _get_price_coingecko(symbol: str, vs: str) -> Optional[float]:
             return None
         raise
 
-# ====== PUBLIC API ======
+# ---------- Public API ----------
 async def get_price(symbol: str, vs: str | None = None) -> Optional[float]:
-    """
-    คืนราคาปัจจุบันของ symbol ในหน่วย vs (default = USDT)
-    """
     vs = (vs or _DEFAULT_VS).upper()
     cached = _get_cached(symbol, vs)
     if cached is not None:
@@ -137,19 +131,16 @@ async def get_price_text(symbol: str, vs: str | None = None) -> str:
     unit = "USD" if vs in ("USD", "USDT") else vs
     return f"💰 ราคา {symbol.upper()} ล่าสุด: {price:,.2f} {unit}"
 
-# ====== Compatibility shim (ไม่ให้โค้ดเก่าพัง) ======
+# ---------- Compatibility shim ----------
 async def get_price_usd(symbol: str) -> Optional[float]:
-    """รองรับ adapter เก่าที่เรียก get_price_usd()"""
     return await get_price(symbol, "USDT")
 
-# ====== No-op resolver เพื่อ warm-up ตอน startup ======
 class _NoopResolver:
     async def refresh(self, force: bool = False) -> bool:
         return True
 
 resolver = _NoopResolver()
 
-# ====== DEBUG ======
 if __name__ == "__main__":
     async def _debug():
         print(await get_price_text("BTC"))
