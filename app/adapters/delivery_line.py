@@ -1,14 +1,38 @@
-# ====== LINE BOT CONFIG ======
-LINE_CHANNEL_SECRET=5ff2d689dc8f9c4ac7d45a5a20ce11c3
-LINE_CHANNEL_ACCESS_TOKEN=YCvky4EDwOvZmzyw9ChiYpBLY4MvFqZZ+a9vC2Nt5mhhw3UQoRUQSw/hJIjtWoxtxnoOLHRevaI9g3sxhNpQlyW5Xkdhw51/jwVAVoPGhoFPUz8Xz9HfxJYRWQNr0YvTXhFoJlxe1+lNbnTUGBGzRgdB04t89/1O/w1cDnyilFU=
+import logging
+from pathlib import Path
+from typing import Iterable
+from dotenv import load_dotenv
 
-# ====== PYTHON CONFIG ======
-PYTHONPATH=.
+# โหลดค่า .env เฉพาะตอนรัน local (บน Render จะอ่าน ENV เอง)
+load_dotenv(dotenv_path=Path(".") / ".env")
 
-# ====== ALERT CONFIG ======
-ALERT_ENABLED=true
-ALERT_THRESHOLD_PCT=5
-ALERT_POLL_SEC=60
-ALERT_COOLDOWN_SEC=1800
-ALERT_HYSTERESIS_PCT=1.0
-ALERT_SYMBOL=BTC
+from app.adapters.line.client import reply_message as _reply
+from app.adapters.line.client import push_message as _push
+from app.adapters.line.client import broadcast_message as _broadcast
+
+logger = logging.getLogger(__name__)
+
+def _coerce_messages(msgs: Iterable[str] | str) -> list[dict]:
+    if isinstance(msgs, str):
+        msgs = [msgs]
+    result = []
+    for s in msgs:
+        text = (s or "").strip()
+        if not text:
+            continue
+        if len(text) > 4900:  # LINE จำกัดข้อความ ~5000 ตัว
+            text = text[:4900] + "\n…(truncated)"
+        result.append({"type": "text", "text": text})
+    return result or [{"type": "text", "text": "(empty)"}]
+
+async def reply_text(reply_token: str, msgs: Iterable[str] | str) -> None:
+    messages = _coerce_messages(msgs)
+    await _reply(reply_token, messages)
+
+async def push_text(user_id: str, msgs: Iterable[str] | str) -> None:
+    messages = _coerce_messages(msgs)
+    await _push(user_id, messages)
+
+async def broadcast_text(msgs: Iterable[str] | str) -> None:
+    messages = _coerce_messages(msgs)
+    await _broadcast(messages)
