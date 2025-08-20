@@ -1,18 +1,26 @@
 # test_alert.py
 import asyncio
-import logging
-from app.utils import state_store
-from app.scheduler import runner
+import httpx
 
-logging.basicConfig(level=logging.INFO)
+SYMBOL_MAP = {
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+    "ETC": "ethereum-classic",
+}
+
+async def get_price(symbol: str) -> float:
+    coin_id = SYMBOL_MAP[symbol]
+    url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd"
+    async with httpx.AsyncClient() as client:
+        r = await client.get(url)
+        r.raise_for_status()
+        data = r.json()
+        return data[coin_id]["usd"]
 
 async def main():
-    # baseline ของ BTC (สมมุติให้มี)
-    state_store.set_baseline("BTC", 10.0)
-
-    # ดึงราคาปัจจุบันของ BTC โดยตรง
-    price = await runner._aget_numeric_price("BTC")
-    print(f"Current BTC price: {price}")
+    for sym in ["BTC", "ETC"]:
+        price = await get_price(sym)
+        print(f"{sym}: {price} USD")
 
 if __name__ == "__main__":
     asyncio.run(main())
