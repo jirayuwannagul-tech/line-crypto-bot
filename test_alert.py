@@ -11,12 +11,13 @@ alert_settings.cooldown_sec = 3       # คูลดาวน์ 3 วินา�
 # ตั้ง baseline ให้ต่ำมาก เพื่อบังคับให้ Alert
 state_store.set_baseline("BTC", 10.0)
 state_store.set_baseline("ETH", 10.0)
+state_store.set_baseline("ETC", 10.0)
 
 async def main():
     print("⚡ Running tick_once (alert test)")
-    # รันทดสอบ BTC
-    await tick_once(symbols=["BTC"], dry_run=False)
-    # รันทดสอบ ETH
-    await tick_once(symbols=["ETH"], dry_run=False)
+    # เรียกทีละรอบ (tick_once จะใช้ symbol จาก state_store เอง)
+    await tick_once(dry_run=False)
+    await tick_once(dry_run=False)
+    await tick_once(dry_run=False)
 
 asyncio.run(main())
