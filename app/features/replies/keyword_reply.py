@@ -9,10 +9,12 @@ from typing import Optional
 # === Keyword mapping ===
 KEYWORD_MAP = {
     "สวัสดี": "สวัสดี",
-    "hello": "Hello there!",
-    "bye": "ลาก่อนครับ",
-    "btc": "BTC ตอนนี้ขยับเยอะ อย่าลืมเช็กกราฟนะ",
+    "ราคา": "กรุณารอสักครู่ ระบบกำลังดึงราคาล่าสุด",
+    "eth": "ETH กำลังมาแรง!",
+    "btc": "BTC ตอนนี้กำลังแกว่งแรง!",
+    "ช่วยเหลือ": "พิมพ์: สวัสดี, ราคา, eth, btc เพื่อดูคำตอบ",
 }
+
 
 def get_reply(text: str) -> Optional[str]:
     """
