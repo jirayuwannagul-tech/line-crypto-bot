@@ -6,5 +6,5 @@ router = APIRouter()
 @router.post("/line/webhook")
 async def line_webhook(request: Request):
     body = await request.json()
-    print("Webhook event:", body)  # log ดูก่อน
-    return {"status": "ok"}  # ✅ ตอบกลับ 200 ทันที
+    print("LINE Webhook event:", body)  # log ดูว่าได้อะไร
+    return {"status": "ok"}  # ✅ ตอบกลับ 200 ทุกครั้ง
