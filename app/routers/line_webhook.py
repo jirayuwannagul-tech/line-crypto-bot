@@ -12,12 +12,14 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 # ทางลัด: พิมพ์สั้น ๆ แค่สัญลักษณ์ (กันสแปมข้อความทั่วไป)
-WHITELIST = {"BTC","ETH","SOL","BNB","XRP","ADA","DOGE","AVAX","DOT","TON"}
+WHITELIST = {"BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "AVAX", "DOT", "TON"}
 GREETINGS = {"สวัสดี", "ดีดี", "ดีจ้า", "hello", "hi"}
+
 
 @router.get("/webhook")
 def webhook_verify():
     return {"status": "ok"}
+
 
 @router.post("/webhook")
 async def line_webhook(
@@ -59,11 +61,11 @@ async def line_webhook(
         if m:
             sym = m.group(1).upper()
             try:
-                msg = await get_price_text(sym)
+                msg = await get_price_text(sym)   # ✅ async call
             except Exception as e:
                 logger.exception("price fetch failed: %s", e)
                 msg = f"ดึงราคา {sym} ไม่สำเร็จ ลองใหม่ครับ 🙏"
-            await reply_message(reply_token, [{"type": "text", "text": msg}])
+            await reply_message(reply_token, [{"type": "text", "text": msg}])  # ✅ async call
             continue
 
         # ---------- กันเคสขึ้นต้น "ราคา" แต่ช่องว่างเพี้ยน ----------
