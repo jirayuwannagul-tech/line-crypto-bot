@@ -3,7 +3,7 @@ import asyncio
 import logging
 
 from app.scheduler import runner
-from app.adapters import state_store
+from app.utils import state_store   # ✅ เปลี่ยนเป็น utils แทน adapters
 
 logging.basicConfig(level=logging.INFO)
 
