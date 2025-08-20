@@ -1,23 +1,8 @@
-import asyncio
-from app.utils import state_store
 from app.scheduler.runner import tick_once
-from app.settings import alerts as alert_settings
-
-# ปรับค่า alert ให้ไว (ทดสอบ)
-alert_settings.threshold_pct = 0.5    # แจ้งที่ ±0.5%
-alert_settings.hysteresis_pct = 0.1   # กันแกว่ง
-alert_settings.cooldown_sec = 3       # คูลดาวน์ 3 วินาที
-
-# ตั้ง baseline ให้ต่ำมาก เพื่อบังคับให้ Alert
-state_store.set_baseline("BTC", 10.0)
-state_store.set_baseline("ETH", 10.0)
-state_store.set_baseline("ETC", 10.0)
+import asyncio
 
 async def main():
-    print("⚡ Running tick_once (alert test)")
-    # เรียกทีละรอบ (tick_once จะใช้ symbol จาก state_store เอง)
-    await tick_once(dry_run=False)
-    await tick_once(dry_run=False)
-    await tick_once(dry_run=False)
+    await tick_once(symbols=["BTC", "ETH", "ETC"], dry_run=False)
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
