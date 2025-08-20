@@ -1,6 +1,9 @@
 # app/utils/crypto_price.py
-# รองรับ "ทุกเหรียญ" จาก CoinGecko + แคช + retry + resolve ซ้ำชื่อด้วย market cap
-# ปรับการแสดงทศนิยมแบบอัตโนมัติ (เหรียญราคาต่ำจะแสดงทศนิยมมากขึ้น)
+# ==============================================
+# ดึงราคาเหรียญจาก CoinGecko + แคช + retry
+# รองรับ resolve ซ้ำชื่อด้วย market cap
+# ฟอร์แมตราคาอัตโนมัติ (ทศนิยมตามช่วงราคา)
+# ==============================================
 
 import time
 import asyncio
@@ -11,6 +14,7 @@ COINGECKO_BASE = "https://api.coingecko.com/api/v3"
 SYMBOL_TTL_SEC = 6 * 60 * 60     # 6 ชั่วโมงสำหรับรายการเหรียญ
 PRICE_TTL_SEC  = 10              # 10 วินาทีสำหรับราคา
 
+# ===== Resolver =====
 class SymbolResolver:
     def __init__(self):
         self._symbol_map: Dict[str, List[str]] = {}   # "btc" -> ["bitcoin", ...]
@@ -49,7 +53,7 @@ class SymbolResolver:
         if len(ids) == 1:
             return ids[0]
 
-        # กรณีชื่อซ้ำหลายตัว → ใช้ /coins/markets เลือก market cap สูงสุด
+        # ถ้ามีหลาย id → ใช้ market cap เลือกอันใหญ่สุด
         ids_param = ",".join(ids[:250])
         url = f"{COINGECKO_BASE}/coins/markets?vs_currency=usd&ids={ids_param}"
         async with httpx.AsyncClient(timeout=20) as client:
@@ -63,7 +67,7 @@ class SymbolResolver:
 
 resolver = SymbolResolver()
 
-# ===== ราคา + แคชสั้น ๆ + retry =====
+# ===== ราคา + แคช + retry =====
 _price_cache: Dict[str, Dict[str, float]] = {}  # coin_id -> {"price": float, "ts": epoch}
 
 async def _fetch_price_usd(coin_id: str) -> Optional[float]:
@@ -78,8 +82,7 @@ async def _fetch_price_usd(coin_id: str) -> Optional[float]:
             if row and "usd" in row:
                 return float(row["usd"])
         except Exception:
-            # backoff เล็กน้อยแล้วลองใหม่
-            if attempt < 2:
+            if attempt < 2:  # backoff ก่อนลองใหม่
                 await asyncio.sleep(0.4 * (attempt + 1))
             else:
                 raise
@@ -98,17 +101,8 @@ async def get_price_usd(symbol: str) -> Optional[float]:
         _price_cache[coin_id] = {"price": price, "ts": now}
     return price
 
-# ===== ฟังก์ชันฟอร์แมตราคา (กำหนดทศนิยมอัตโนมัติ) =====
+# ===== ฟังก์ชันฟอร์แมตราคา (ทศนิยมอัตโนมัติ) =====
 def _format_price_auto(price: float) -> str:
-    """
-    กำหนดจำนวนทศนิยมตามช่วงราคา:
-      - >= 1,000         → 2 ตำแหน่ง
-      - >= 1             → 2 ตำแหน่ง
-      - >= 0.1           → 4 ตำแหน่ง
-      - >= 0.01          → 5 ตำแหน่ง
-      - >= 0.001         → 6 ตำแหน่ง
-      - อื่น ๆ (เล็กมาก) → 8 ตำแหน่ง
-    """
     if price >= 1000:
         return f"{price:,.2f}"
     if price >= 1:
