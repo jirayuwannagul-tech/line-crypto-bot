@@ -1,24 +1,21 @@
-# test_broadcast.py
+# test_alert.py
 import asyncio
-from app.utils.crypto_price import get_price_text
-from app.adapters.delivery_line import broadcast_message
-
+from app.scheduler.runner import tick_once
+from app.settings.alerts import alert_settings
+from app.utils import state_store
 
 async def main():
-    symbols = ["btc", "eth", "doge", "shib", "abcxyz"]
-    for sym in symbols:
-        try:
-            msg = await get_price_text(sym)
-        except Exception as e:
-            # ดัก error เพื่อไม่ให้ loop หยุด
-            msg = f"⚠️ ดึงราคา {sym.upper()} ไม่สำเร็จ ({e.__class__.__name__})"
+    # ปรับ alert ให้ไว (เพื่อทดสอบ)
+    alert_settings.threshold_pct = 0.5    # แจ้งที่ ±0.5%
+    alert_settings.hysteresis_pct = 0.1   # กันแกว่ง
+    alert_settings.cooldown_sec = 3       # คูลดาวน์ 3 วินาที
 
-        # ส่งเข้า LINE
-        await broadcast_message(msg)
+    # บังคับ baseline BTC/ETH ให้ต่ำมาก เพื่อให้ trigger แน่ ๆ
+    state_store.set_baseline("BTC", 10.0)
+    state_store.set_baseline("ETH", 10.0)
 
-        # เว้นเวลาเพื่อเลี่ยง rate limit
-        await asyncio.sleep(3)
-
+    print("⚡ Running tick_once (alert test)")
+    await tick_once(dry_run=False)  # ยิง alert จริงเข้า LINE
 
 if __name__ == "__main__":
     asyncio.run(main())
