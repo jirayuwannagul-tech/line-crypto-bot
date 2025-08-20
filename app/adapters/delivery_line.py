@@ -8,9 +8,10 @@ import re
 import httpx
 import logging
 from dotenv import load_dotenv
+from pathlib import Path
 
-# โหลดค่าจาก .env (ถ้ามี)
-load_dotenv()
+# โหลดค่าจาก .env โดยระบุพาธตรง (กันเคส interactive/`python -c`)
+load_dotenv(dotenv_path=Path(".") / ".env")
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,8 @@ LINE_API_REPLY = "https://api.line.me/v2/bot/message/reply"
 LINE_API_PUSH = "https://api.line.me/v2/bot/message/push"
 LINE_API_BROADCAST = "https://api.line.me/v2/bot/message/broadcast"
 
-# --- sanitize token: ตัดอักขระนอกเหนือ ASCII/อนุญาตทิ้ง (กัน zero‑width, ช่องว่างแปลก ๆ) ---
+
+# --- sanitize token: ตัดอักขระนอกเหนือ ASCII/อนุญาตทิ้ง (กัน zero-width, ช่องว่างแปลก ๆ) ---
 def _sanitize_token(raw: str | None) -> str | None:
     if raw is None:
         return None
@@ -29,7 +31,9 @@ def _sanitize_token(raw: str | None) -> str | None:
         logger.warning("LINE_CHANNEL_ACCESS_TOKEN contained invalid characters; sanitized.")
     return s_clean
 
+
 LINE_CHANNEL_ACCESS_TOKEN = _sanitize_token(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
+
 
 def _auth_headers() -> dict:
     if not LINE_CHANNEL_ACCESS_TOKEN:
@@ -39,6 +43,7 @@ def _auth_headers() -> dict:
         "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
         "Content-Type": "application/json",
     }
+
 
 async def reply_message(reply_token: str, text: str) -> None:
     headers = _auth_headers()
@@ -52,6 +57,7 @@ async def reply_message(reply_token: str, text: str) -> None:
         else:
             logger.info("reply_message sent: %s", text)
 
+
 async def push_message(user_id: str, text: str) -> None:
     headers = _auth_headers()
     if not headers:
@@ -63,6 +69,7 @@ async def push_message(user_id: str, text: str) -> None:
             logger.error("push_message failed: %s %s", resp.status_code, resp.text)
         else:
             logger.info("push_message sent to %s: %s", user_id, text)
+
 
 async def broadcast_message(text: str) -> None:
     headers = _auth_headers()
