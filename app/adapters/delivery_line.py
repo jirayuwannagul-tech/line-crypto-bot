@@ -1,39 +1,50 @@
 # app/adapters/delivery_line.py
 # =============================================================================
-# LINE Delivery Adapter
-# รองรับทั้ง reply (ตอบกลับ user) และ push/broadcast (แจ้งเตือนอัตโนมัติ)
+# LINE Delivery Adapter - reply / push / broadcast
 # =============================================================================
 
 import os
+import re
 import httpx
 import logging
 from dotenv import load_dotenv
 
-# โหลดค่า environment จากไฟล์ .env (ถ้ามี)
+# โหลดค่าจาก .env (ถ้ามี)
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_API_REPLY = "https://api.line.me/v2/bot/message/reply"
 LINE_API_PUSH = "https://api.line.me/v2/bot/message/push"
 LINE_API_BROADCAST = "https://api.line.me/v2/bot/message/broadcast"
 
+# --- sanitize token: ตัดอักขระนอกเหนือ ASCII/อนุญาตทิ้ง (กัน zero‑width, ช่องว่างแปลก ๆ) ---
+def _sanitize_token(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    s = raw.strip()
+    # เก็บเฉพาะตัวที่คาดว่าจะเจอใน token ของ LINE (อักษร, ตัวเลข, + / = - _ . ~)
+    s_clean = re.sub(r"[^A-Za-z0-9\+\-_/=\.~]", "", s)
+    if s_clean != s:
+        logger.warning("LINE_CHANNEL_ACCESS_TOKEN contained invalid characters; sanitized.")
+    return s_clean
 
-async def reply_message(reply_token: str, text: str) -> None:
-    """ส่งข้อความ reply กลับไปยัง user (ต้องมี reply_token)"""
+LINE_CHANNEL_ACCESS_TOKEN = _sanitize_token(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
+
+def _auth_headers() -> dict:
     if not LINE_CHANNEL_ACCESS_TOKEN:
         logger.error("LINE_CHANNEL_ACCESS_TOKEN is not set")
-        return
-
-    headers = {
+        return {}
+    return {
         "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
         "Content-Type": "application/json",
     }
-    payload = {
-        "replyToken": reply_token,
-        "messages": [{"type": "text", "text": text}],
-    }
+
+async def reply_message(reply_token: str, text: str) -> None:
+    headers = _auth_headers()
+    if not headers:
+        return
+    payload = {"replyToken": reply_token, "messages": [{"type": "text", "text": text}]}
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(LINE_API_REPLY, headers=headers, json=payload)
         if resp.is_error:
@@ -41,21 +52,11 @@ async def reply_message(reply_token: str, text: str) -> None:
         else:
             logger.info("reply_message sent: %s", text)
 
-
 async def push_message(user_id: str, text: str) -> None:
-    """ส่งข้อความหา user เฉพาะ (ต้องรู้ user_id หรือ groupId)"""
-    if not LINE_CHANNEL_ACCESS_TOKEN:
-        logger.error("LINE_CHANNEL_ACCESS_TOKEN is not set")
+    headers = _auth_headers()
+    if not headers:
         return
-
-    headers = {
-        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "to": user_id,
-        "messages": [{"type": "text", "text": text}],
-    }
+    payload = {"to": user_id, "messages": [{"type": "text", "text": text}]}
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(LINE_API_PUSH, headers=headers, json=payload)
         if resp.is_error:
@@ -63,20 +64,11 @@ async def push_message(user_id: str, text: str) -> None:
         else:
             logger.info("push_message sent to %s: %s", user_id, text)
 
-
 async def broadcast_message(text: str) -> None:
-    """ส่งข้อความ broadcast ถึงทุกคนที่ติดตาม OA"""
-    if not LINE_CHANNEL_ACCESS_TOKEN:
-        logger.error("LINE_CHANNEL_ACCESS_TOKEN is not set")
+    headers = _auth_headers()
+    if not headers:
         return
-
-    headers = {
-        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "messages": [{"type": "text", "text": text}],
-    }
+    payload = {"messages": [{"type": "text", "text": text}]}
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(LINE_API_BROADCAST, headers=headers, json=payload)
         if resp.is_error:
