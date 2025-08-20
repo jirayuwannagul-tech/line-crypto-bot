@@ -10,7 +10,7 @@ import logging
 from dotenv import load_dotenv
 from pathlib import Path
 
-# โหลดค่าจาก .env โดยระบุพาธตรง (กันเคส interactive/`python -c`)
+# โหลด .env แบบระบุพาธ (รองรับ python -c / interactive)
 load_dotenv(dotenv_path=Path(".") / ".env")
 
 logger = logging.getLogger(__name__)
@@ -19,21 +19,32 @@ LINE_API_REPLY = "https://api.line.me/v2/bot/message/reply"
 LINE_API_PUSH = "https://api.line.me/v2/bot/message/push"
 LINE_API_BROADCAST = "https://api.line.me/v2/bot/message/broadcast"
 
+# --- remove only invisible BOM/zero-width chars; don't mutate valid tokens ---
+_INVISIBLES = [
+    "\u200b",  # ZERO WIDTH SPACE
+    "\u200c",  # ZERO WIDTH NON-JOINER
+    "\u200d",  # ZERO WIDTH JOINER
+    "\ufeff",  # BOM
+]
 
-# --- sanitize token: ตัดอักขระนอกเหนือ ASCII/อนุญาตทิ้ง (กัน zero-width, ช่องว่างแปลก ๆ) ---
-def _sanitize_token(raw: str | None) -> str | None:
+def _clean_invisible(raw: str | None) -> str | None:
     if raw is None:
         return None
     s = raw.strip()
-    # เก็บเฉพาะตัวที่คาดว่าจะเจอใน token ของ LINE (อักษร, ตัวเลข, + / = - _ . ~)
-    s_clean = re.sub(r"[^A-Za-z0-9\+\-_/=\.~]", "", s)
-    if s_clean != s:
-        logger.warning("LINE_CHANNEL_ACCESS_TOKEN contained invalid characters; sanitized.")
-    return s_clean
+    for ch in _INVISIBLES:
+        s = s.replace(ch, "")
+    return s
 
+def _validate_token(tok: str) -> bool:
+    # LINE token โดยปกติเป็น base64-like: ตัวอักษร/ตัวเลข + / = _ - .
+    return re.fullmatch(r"[A-Za-z0-9+\-_/=\.~]+", tok) is not None
 
-LINE_CHANNEL_ACCESS_TOKEN = _sanitize_token(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
+LINE_CHANNEL_ACCESS_TOKEN = _clean_invisible(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 
+if LINE_CHANNEL_ACCESS_TOKEN and not _validate_token(LINE_CHANNEL_ACCESS_TOKEN):
+    # log เฉพาะรหัสตัวอักษร (ไม่พิมพ์ token)
+    bad = [hex(ord(c)) for c in LINE_CHANNEL_ACCESS_TOKEN if not re.fullmatch(r"[A-Za-z0-9+\-_/=\.~]", c)]
+    logger.error("LINE_CHANNEL_ACCESS_TOKEN has invalid chars: %s", bad)
 
 def _auth_headers() -> dict:
     if not LINE_CHANNEL_ACCESS_TOKEN:
@@ -43,7 +54,6 @@ def _auth_headers() -> dict:
         "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
         "Content-Type": "application/json",
     }
-
 
 async def reply_message(reply_token: str, text: str) -> None:
     headers = _auth_headers()
@@ -57,7 +67,6 @@ async def reply_message(reply_token: str, text: str) -> None:
         else:
             logger.info("reply_message sent: %s", text)
 
-
 async def push_message(user_id: str, text: str) -> None:
     headers = _auth_headers()
     if not headers:
@@ -69,7 +78,6 @@ async def push_message(user_id: str, text: str) -> None:
             logger.error("push_message failed: %s %s", resp.status_code, resp.text)
         else:
             logger.info("push_message sent to %s: %s", user_id, text)
-
 
 async def broadcast_message(text: str) -> None:
     headers = _auth_headers()
