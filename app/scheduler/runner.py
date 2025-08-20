@@ -1,16 +1,9 @@
-"""
-app/scheduler/runner.py
------------------------
-เลเยอร์: scheduler
-หน้าที่: รันงาน background เพื่อตรวจราคา BTC เป็นช่วง ๆ และส่งแจ้งเตือนเมื่อเปลี่ยนแปลง ≥ threshold
-ผูกกับ:
-- app/settings/alerts.py
-- app/adapters/price_provider.py    (async get_price)
-- app/utils/crypto_price.py         (fallback ดึงราคาถ้า provider ไม่มีตัวเลข)
-- app/features/alerts/percentage_change.py
-- app/utils/state_store.py
-- app/adapters/delivery_line.py
-"""
+# app/scheduler/runner.py
+# =============================================================================
+# Scheduler Runner
+# ทำหน้าที่: รันงาน background → ตรวจราคา BTC → ประเมิน threshold/cooldown/hysteresis
+# ถ้าถึงเกณฑ์ → ส่งแจ้งเตือนเข้า LINE (broadcast)
+# =============================================================================
 
 import asyncio
 import logging
@@ -43,6 +36,9 @@ try:
 except Exception:
     crypto_get_price = None
 
+# ===== LINE Delivery =====
+from app.adapters.delivery_line import broadcast_message
+
 
 # ==============================
 # Helper: ดึงราคาปัจจุบันเป็น float
@@ -66,33 +62,6 @@ def _format_alert_text(symbol: str, current_price: float, pct_change: float) -> 
     """สร้างข้อความแจ้งเตือนสำหรับส่ง LINE"""
     direction = "↑" if pct_change >= 0 else "↓"
     return f"[ALERT] {symbol} {direction}{abs(pct_change):.2f}% | Price: {current_price:,.2f} USD"
-
-
-def _try_send_line_message(text: str) -> None:
-    """พยายามส่งข้อความผ่าน LINE adapters"""
-    try:
-        from app.adapters.delivery_line import push_message, broadcast_message  # type: ignore
-    except Exception:
-        logger.warning("LINE delivery adapter not available; skip sending message.")
-        return
-
-    # broadcast ก่อน
-    try:
-        if "broadcast_message" in locals():
-            broadcast_message(text)
-            return
-    except Exception as e:
-        logger.warning("broadcast_message failed: %s", e)
-
-    # push เฉพาะ USER_ID
-    try:
-        USER_ID: Optional[str] = None  # TODO: กำหนดจาก config/DB
-        if USER_ID:
-            push_message(USER_ID, text)
-        else:
-            logger.warning("No USER_ID available for push_message; skip sending.")
-    except Exception as e:
-        logger.error("push_message failed: %s", e)
 
 
 # ==============================
@@ -149,7 +118,7 @@ async def tick_once(dry_run: bool = False) -> None:
         if dry_run:
             logger.info("[DRY-RUN] Would send LINE: %s", text)
         else:
-            _try_send_line_message(text)
+            await broadcast_message(text)   # ส่งเข้า LINE จริง
 
         mark_alerted(symbol)
         set_baseline(symbol, current_price)
