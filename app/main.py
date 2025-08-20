@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from app.routers.chat import router as chat_router
 from app.routers.health import router as health_router
-from app.routers.line_router import router as line_router   # 👈 เปลี่ยนเป็น line_router.py
+from app.routers.line_webhook import router as line_router   # ✅ ใช้ line_webhook.py
 from app.utils.logging import setup_logging
 from app.utils.settings import settings
 from app.utils.crypto_price import resolver  # 👈 warm-up resolver
@@ -24,11 +24,11 @@ def create_app() -> FastAPI:
 
 app = create_app()
 
-# 👇 อุ่นเครื่องลิสต์เหรียญตอนสตาร์ท (ลดพังรอบแรก)
+# 👇 อุ่นเครื่องลิสต์เหรียญตอนสตาร์ท
 @app.on_event("startup")
 async def warmup():
     await resolver.refresh(force=True)
-    settings.validate_line()   # เช็ก env ว่าตั้ง LINE token ครบ
+    settings.validate_line()   # เช็กว่า env LINE token ครบ
 
 # =========================
 # LAYER: ROOT ROUTE
