@@ -1,23 +1,18 @@
-"""
-app/utils/state_store.py
-------------------------
-เลเยอร์: utils
-หน้าที่: เก็บสถานะ (state) สำหรับระบบแจ้งเตือนแบบ in-memory
-- baseline (ราคาตั้งต้น)
-- last_alert_ts (เวลาที่แจ้งล่าสุด)
-- last_state (สถานะปัจจุบัน: idle | armed)
-ใช้ asyncio.Lock() กัน race เผื่อมีหลาย job
-"""
+# =============================================================================
+# State Store
+# เก็บสถานะ (state) สำหรับระบบแจ้งเตือนแบบ in-memory
+# baseline, last_alert_ts, last_state
+# ใช้ asyncio.Lock() กัน race เผื่อมีหลาย job
+# =============================================================================
 
 import asyncio
 import time
 from typing import Dict, Any, Optional
 
-# เก็บ state ทั้งหมดไว้ใน dict กลาง
 # โครงสร้าง: {symbol: {"baseline": float, "last_alert_ts": float|None, "last_state": str}}
 _state_store: Dict[str, Dict[str, Any]] = {}
 
-# lock ป้องกัน race condition เวลาแก้ไข state
+# lock ป้องกัน race condition
 _state_lock = asyncio.Lock()
 
 
@@ -65,6 +60,6 @@ def reset_state(symbol: str) -> None:
     _state_store[symbol] = {"baseline": None, "last_alert_ts": None, "last_state": "idle"}
 
 
-# ===== 🧪 คำสั่งทดสอบ =====
+# ===== 🧪 Test Command =====
 # python3 -c "from app.utils.state_store import *; set_baseline('BTC', 60000.0); print(get_state('BTC'))"
-# ✅ Acceptance: {'baseline': 60000.0, 'last_alert_ts': None, 'last_state': 'armed'}
+# ✅ {'baseline': 60000.0, 'last_alert_ts': None, 'last_state': 'armed'}

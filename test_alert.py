@@ -1,26 +1,22 @@
-# test_alert.py
+# =============================================================================
+# Test Script - Manual run เพื่อทดสอบการแจ้งเตือน
+# ใช้ดึงราคามาแสดง + trigger tick_once()
+# =============================================================================
+
 import asyncio
-import httpx
+from app.scheduler.runner import tick_once, TOP10_SYMBOLS
+from app.utils.crypto_price import get_price_text
 
-SYMBOL_MAP = {
-    "BTC": "bitcoin",
-    "ETH": "ethereum",
-    "ETC": "ethereum-classic",
-}
-
-async def get_price(symbol: str) -> float:
-    coin_id = SYMBOL_MAP[symbol]
-    url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd"
-    async with httpx.AsyncClient() as client:
-        r = await client.get(url)
-        r.raise_for_status()
-        data = r.json()
-        return data[coin_id]["usd"]
 
 async def main():
-    for sym in ["BTC", "ETC"]:
-        price = await get_price(sym)
-        print(f"{sym}: {price} USD")
+    print("=== 🔎 ทดสอบดึงราคาปัจจุบัน ===")
+    for sym in TOP10_SYMBOLS:
+        text = await get_price_text(sym)
+        print(text)
+
+    print("\n=== 🚨 ทดสอบ tick_once (dry-run) ===")
+    await tick_once(symbols=TOP10_SYMBOLS, dry_run=True)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

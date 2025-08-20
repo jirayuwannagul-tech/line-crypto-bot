@@ -1,9 +1,8 @@
-# app/utils/crypto_price.py
-# ==============================================
+# =============================================================================
+# Crypto Price Utility
 # ดึงราคาเหรียญจาก CoinGecko + แคช + retry
-# รองรับ resolve ซ้ำชื่อด้วย market cap
-# ฟอร์แมตราคาอัตโนมัติ (ทศนิยมตามช่วงราคา)
-# ==============================================
+# รองรับการ resolve symbol → coin_id
+# =============================================================================
 
 import time
 import asyncio
@@ -42,10 +41,7 @@ class SymbolResolver:
         self._last_loaded = time.time()
 
     async def resolve_id(self, symbol: str) -> Optional[str]:
-        """
-        คืนค่า coin_id จาก symbol (ไม่สนตัวพิมพ์)
-        ถ้าชนหลาย id → เลือกตัวที่ market cap สูงสุด
-        """
+        """คืนค่า coin_id จาก symbol (ไม่สนตัวพิมพ์)"""
         await self.refresh()
         ids = self._symbol_map.get(symbol.lower())
         if not ids:
@@ -101,7 +97,7 @@ async def get_price_usd(symbol: str) -> Optional[float]:
         _price_cache[coin_id] = {"price": price, "ts": now}
     return price
 
-# ===== ฟังก์ชันฟอร์แมตราคา (ทศนิยมอัตโนมัติ) =====
+# ===== ฟังก์ชันฟอร์แมตราคา =====
 def _format_price_auto(price: float) -> str:
     if price >= 1000:
         return f"{price:,.2f}"
