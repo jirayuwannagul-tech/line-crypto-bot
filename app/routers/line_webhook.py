@@ -1,6 +1,7 @@
 # app/routers/line_webhook.py
 import json
 import logging
+import re
 from fastapi import APIRouter, Header, HTTPException, Request
 
 from app.utils.settings import settings
@@ -10,9 +11,9 @@ from app.utils.crypto_price import get_price_text
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# เหรียญที่รองรับ
-SUPPORTED = {"BTC", "ETH", "SOL", "ETC", "ARB", "HBAR", "ADA", "DOGE", "SAND"}
-GREETINGS = {"สวัสดี", "ดีดี", "ดีจ้า"}
+# พิมพ์สั้น ๆ ได้เลยสำหรับเหรียญยอดฮิต (กันสแปมข้อความทั่วไป)
+SUPPORTED = {"BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "AVAX", "DOT", "TON"}
+GREETINGS = {"สวัสดี", "ดีดี", "ดีจ้า", "hello", "hi"}
 
 @router.get("/webhook")
 def webhook_verify():
@@ -23,56 +24,65 @@ async def line_webhook(
     request: Request,
     x_line_signature: str | None = Header(default=None, alias="X-Line-Signature"),
 ):
-    # คอนฟิกจำเป็น
+    # ตรวจ config ที่ต้องมี
     settings.validate_line()
 
-    # raw body
+    # body + signature
     body = await request.body()
-
-    # ต้องมีลายเซ็น
     if not x_line_signature:
         raise HTTPException(status_code=400, detail="Missing X-Line-Signature")
-
-    # ตรวจลายเซ็น
     if not verify_signature(settings.LINE_CHANNEL_SECRET, body, x_line_signature):
         raise HTTPException(status_code=400, detail="Invalid signature")
 
-    # แปลง JSON
+    # parse events
     try:
         data = json.loads(body.decode("utf-8"))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
-    # วนอ่าน events
     events = data.get("events", [])
     for ev in events:
-        if ev.get("type") == "message" and ev.get("message", {}).get("type") == "text":
-            reply_token = ev.get("replyToken")
-            text = (ev.get("message", {}).get("text") or "").strip()
-            if not reply_token:
-                continue
+        if ev.get("type") != "message":
+            continue
+        if ev.get("message", {}).get("type") != "text":
+            continue
 
-            s = text.upper()
+        reply_token = ev.get("replyToken")
+        if not reply_token:
+            continue
 
-            # --- ราคาคริปโต ---
-            if s in SUPPORTED:
-                try:
-                    msg = await get_price_text(s)  # Binance → fallback CoinGecko
-                    await reply_message(reply_token, [{"type": "text", "text": msg}])
-                except Exception as e:
-                    logger.exception("price fetch failed: %s", e)
-                    await reply_message(
-                        reply_token,
-                        [{"type": "text", "text": f"ดึงราคา {s} ไม่สำเร็จ ลองใหม่ครับ 🙏"}],
-                    )
-                continue
+        text = (ev.get("message", {}).get("text") or "").strip()
+        upper = text.upper()
 
-            # --- คำทักทาย ---
-            if text in GREETINGS:
-                await reply_message(reply_token, [{"type": "text", "text": "สวัสดีครับ 🙏"}])
-                continue
+        # ---------- คำสั่ง "ราคา <SYMBOL>" (รองรับทุกเหรียญ) ----------
+        m = re.search(r"ราคา\s+([A-Za-z0-9._\-]+)", text, flags=re.IGNORECASE)
+        if m:
+            sym = m.group(1).upper()
+            try:
+                msg = await get_price_text(sym)      # ใช้ resolver → รองรับทุกเหรียญ
+            except Exception as e:
+                logger.exception("price fetch failed: %s", e)
+                msg = f"ดึงราคา {sym} ไม่สำเร็จ ลองใหม่ครับ 🙏"
+            await reply_message(reply_token, [{"type": "text", "text": msg}])
+            continue
 
-            # --- ตอบรับค่าอื่น ๆ ---
-            await reply_message(reply_token, [{"type": "text", "text": f"คุณว่า: {text}"}])
+        # ---------- พิมพ์สั้น ๆ แค่สัญลักษณ์ (เฉพาะ whitelist) ----------
+        if upper in SUPPORTED:
+            try:
+                msg = await get_price_text(upper)    # รองรับทุกเหรียญ (ตัวนี้ก็ใช้ได้)
+            except Exception as e:
+                logger.exception("price fetch failed: %s", e)
+                msg = f"ดึงราคา {upper} ไม่สำเร็จ ลองใหม่ครับ 🙏"
+            await reply_message(reply_token, [{"type": "text", "text": msg}])
+            continue
+
+        # ---------- ทักทาย ----------
+        if text.strip().lower() in {g.lower() for g in GREETINGS}:
+            await reply_message(reply_token, [{"type": "text", "text": "สวัสดีครับ 🙏"}])
+            continue
+
+        # ---------- default help ----------
+        help_msg = "พิมพ์: ราคา BTC | ราคา ETH | ราคา SOL (รองรับทุกเหรียญบน CoinGecko)"
+        await reply_message(reply_token, [{"type": "text", "text": help_msg}])
 
     return {"status": "ok", "events": len(events)}
