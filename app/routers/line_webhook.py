@@ -1,6 +1,3 @@
-# app/routers/line_webhook.py
-from __future__ import annotations
-
 import os
 import json
 import hmac
@@ -11,6 +8,9 @@ from typing import Any, Dict, Set
 
 import httpx
 from fastapi import APIRouter, Request, Header, Response
+
+# 🔹 import keyword reply layer
+from app.features.replies.keyword_reply import get_reply
 
 router = APIRouter(tags=["line"])
 
@@ -36,13 +36,9 @@ async def line_webhook(
     request: Request,
     x_line_signature: str | None = Header(default=None, convert_underscores=False),
 ) -> Response:
-    """
-    รับ LINE Webhook → log event ทั้งก้อน
-    ดึง userId/groupId/roomId ออกมา และ (ออปชัน) reply echo กลับ
-    """
+    """รับ LINE Webhook → ตรวจลายเซ็น → ดึงข้อความ และตอบกลับ"""
     raw: bytes = await request.body()
 
-    # 1) log ก้อนดิบสวย ๆ
     try:
         payload: Dict[str, Any] = json.loads(raw.decode("utf-8"))
     except Exception:
@@ -51,7 +47,7 @@ async def line_webhook(
 
     logger.info("LINE Webhook event (raw): %s", json.dumps(payload, ensure_ascii=False))
 
-    # 2) ตรวจลายเซ็น (ถ้าตั้ง CHANNEL_SECRET)
+    # ตรวจลายเซ็น
     if CHANNEL_SECRET:
         if not x_line_signature:
             logger.warning("LINE webhook: missing X-Line-Signature header")
@@ -62,43 +58,30 @@ async def line_webhook(
             else:
                 logger.info("LINE webhook: signature verification OK")
 
-    # 3) ดึง IDs เพื่อเอาไปใช้ push
-    user_ids: Set[str] = set()
-    group_ids: Set[str] = set()
-    room_ids: Set[str] = set()
-
-    for ev in payload.get("events", []):
-        src = ev.get("source", {})
-        uid = src.get("userId")
-        gid = src.get("groupId")
-        rid = src.get("roomId")
-        if uid:
-            user_ids.add(uid)
-        if gid:
-            group_ids.add(gid)
-        if rid:
-            room_ids.add(rid)
-
-    logger.info("Extracted IDs → users=%s groups=%s rooms=%s",
-                list(user_ids), list(group_ids), list(room_ids))
-
-    # 4) (ออปชัน) echo ข้อความกลับ เพื่อทดสอบ reply API
+    # loop event
     for ev in payload.get("events", []):
         try:
             if ev.get("type") == "message" and "replyToken" in ev:
                 text = ev.get("message", {}).get("text", "")
-                await _reply_text(ev["replyToken"], f"รับแล้ว: {text or 'OK'}")
+
+                # ใช้ keyword reply
+                reply_text = get_reply(text)
+
+                # ถ้าไม่เจอ keyword → ตอบ default
+                if not reply_text:
+                    reply_text = "ไม่เข้าใจคำสั่งครับ"
+
+                await _reply_text(ev["replyToken"], reply_text)
+
         except Exception as e:
             logger.warning("Reply failed (non-blocking): %s", e)
 
-    # ต้องตอบ 200 เสมอให้ LINE
     return Response(status_code=200)
 
 
 async def _reply_text(reply_token: str, text: str) -> None:
-    """เรียก LINE reply API (ต้องตั้ง LINE_CHANNEL_ACCESS_TOKEN ให้ถูก)"""
+    """เรียก LINE reply API"""
     if not CHANNEL_ACCESS_TOKEN:
-        # ไม่บล็อค flow แต่เตือนให้ไปตั้ง env
         logging.warning("CHANNEL_ACCESS_TOKEN not set; skip reply.")
         return
 
