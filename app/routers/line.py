@@ -1,6 +1,6 @@
 # app/routers/line.py
 from fastapi import APIRouter, Request
-from app.services.signal_service import analyze_btc
+from app.services.signal_engine import analyze_btc
 
 router = APIRouter()
 

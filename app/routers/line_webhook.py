@@ -1,20 +1,23 @@
+# app/routers/line_webhook.py
 import os
 import json
 import hmac
 import base64
 import hashlib
 import logging
-from typing import Any, Dict, Set
+from typing import Any, Dict
 
 import httpx
 from fastapi import APIRouter, Request, Header, Response
 
-# 🔹 import keyword reply layer
+# 🔹 keyword reply
 from app.features.replies.keyword_reply import get_reply
+# 🔹 wave analysis service
+from app.services.wave_service import analyze_wave, build_brief_message
 
 router = APIRouter(tags=["line"])
 
-# ตั้งค่าจาก ENV (อย่าลืมใส่ใน Render/เครื่องคุณ)
+# ENV config
 CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
 CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "")
 
@@ -22,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 def _verify_signature(channel_secret: str, body: bytes, signature: str) -> bool:
-    """ตรวจสอบ X-Line-Signature ตามคู่มือ LINE"""
+    """ตรวจสอบ X-Line-Signature"""
     try:
         mac = hmac.new(channel_secret.encode("utf-8"), body, hashlib.sha256).digest()
         expected = base64.b64encode(mac).decode("utf-8")
@@ -36,42 +39,48 @@ async def line_webhook(
     request: Request,
     x_line_signature: str | None = Header(default=None, convert_underscores=False),
 ) -> Response:
-    """รับ LINE Webhook → ตรวจลายเซ็น → ดึงข้อความ และตอบกลับ"""
     raw: bytes = await request.body()
-
     try:
         payload: Dict[str, Any] = json.loads(raw.decode("utf-8"))
     except Exception:
         logger.error("LINE webhook: invalid JSON body")
         return Response(status_code=400)
 
-    logger.info("LINE Webhook event (raw): %s", json.dumps(payload, ensure_ascii=False))
+    # verify signature
+    if CHANNEL_SECRET and x_line_signature:
+        ok = _verify_signature(CHANNEL_SECRET, raw, x_line_signature)
+        if not ok:
+            logger.warning("LINE webhook: signature verification FAILED")
+            return Response(status_code=403)
 
-    # ตรวจลายเซ็น
-    if CHANNEL_SECRET:
-        if not x_line_signature:
-            logger.warning("LINE webhook: missing X-Line-Signature header")
-        else:
-            ok = _verify_signature(CHANNEL_SECRET, raw, x_line_signature)
-            if not ok:
-                logger.warning("LINE webhook: signature verification FAILED")
-            else:
-                logger.info("LINE webhook: signature verification OK")
-
-    # loop event
     for ev in payload.get("events", []):
         try:
             if ev.get("type") == "message" and "replyToken" in ev:
-                text = ev.get("message", {}).get("text", "")
+                text = ev.get("message", {}).get("text", "").strip()
+                reply_token = ev["replyToken"]
 
-                # ใช้ keyword reply
-                reply_text = get_reply(text)
+                reply_text = None
 
-                # ถ้าไม่เจอ keyword → ตอบ default
+                # --- Integration: check if user typed "analyze SYMBOL TF"
+                if text.lower().startswith("analyze"):
+                    parts = text.split()
+                    if len(parts) >= 3:
+                        symbol = parts[1].upper()
+                        tf = parts[2].upper()
+                        try:
+                            payload = analyze_wave(symbol, tf)
+                            reply_text = build_brief_message(payload)
+                        except Exception as e:
+                            logger.exception("Analyze failed")
+                            reply_text = f"❌ วิเคราะห์ไม่สำเร็จ: {e}"
+                    else:
+                        reply_text = "ใช้รูปแบบ: analyze SYMBOL TF\nเช่น: analyze BTCUSDT 1D"
+
+                # --- Otherwise: keyword reply
                 if not reply_text:
-                    reply_text = "ไม่เข้าใจคำสั่งครับ"
+                    reply_text = get_reply(text) or "ไม่เข้าใจคำสั่งครับ"
 
-                await _reply_text(ev["replyToken"], reply_text)
+                await _reply_text(reply_token, reply_text)
 
         except Exception as e:
             logger.warning("Reply failed (non-blocking): %s", e)
