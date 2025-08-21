@@ -61,6 +61,35 @@ _WATCH_DEL = re.compile(
     re.IGNORECASE,
 )
 
+# ====== พาร์เซอร์เร็วสำหรับคำสั่งวิเคราะห์ ======
+_ANALYZE_TH = re.compile(
+    r"^(?:วิเคราะห์|analyze)\s+([A-Za-z0-9:/._-]+)(?:\s+([0-9]+[mMhHdDwW]|[124]H|1D|4H|1W|15m|30m|60m|1ชั่วโมง|4ชั่วโมง|1วัน|1สัปดาห์))?$",
+    re.IGNORECASE,
+)
+
+def _quick_parse_analyze(text: str):
+    """
+    รับ: "วิเคราะห์ BTC", "วิเคราะห์ BTCUSDT 4H", "analyze btc 1D", "วิเคราะห์ BTC 1ชั่วโมง"
+    คืน: (symbol_norm, tf_norm) หรือ None
+    ดีฟอลต์: symbol=BTCUSDT เมื่อให้ 'BTC', tf=1D เมื่อไม่ระบุ
+    """
+    m = _ANALYZE_TH.match(text.strip())
+    if not m:
+        return None
+    sym_raw = m.group(1)
+    tf_raw  = (m.group(2) or "").strip()
+    symbol = _norm_symbol(sym_raw)
+    if symbol in ("BTC", "XBT"):  # ปรับได้ตามที่ใช้จริง
+        symbol = "BTCUSDT"
+    tf_map = {
+        "1H":"1H", "4H":"4H", "1D":"1D", "1W":"1W",
+        "1ชั่วโมง":"1H", "4ชั่วโมง":"4H", "1วัน":"1D", "1สัปดาห์":"1W",
+        "15M":"15m", "30M":"30m", "60M":"1H",
+        "15m":"15m", "30m":"30m",
+    }
+    tf = tf_map.get(tf_raw.upper(), "1D") if tf_raw else "1D"
+    return (symbol, tf)
+
 
 # NOTE: main.py include_router(..., prefix="/line")
 # ดังนั้น path ที่นี่ใช้ "/webhook" ให้ลงตัวเป็น /line/webhook
@@ -98,6 +127,39 @@ async def line_webhook(request: Request):
 
             user_text = (event.message.text or "").strip()
             user_id = getattr(event.source, "user_id", None)
+
+            # 0.5) วิเคราะห์จริง (ดักก่อน get_reply เพื่อไม่โดนกลืน)
+            parsed = _quick_parse_analyze(user_text) or parse_analyze_command(user_text)
+            if parsed:
+                symbol, tf = parsed
+                try:
+                    df = get_data(symbol, tf)
+                    result = analyze_scenarios(df, symbol=symbol, tf=tf)
+
+                    pct = result.get("percent", {}) or {}
+                    lv = result.get("levels", {}) or {}
+                    fib = lv.get("fibo", {}) or {}
+                    el = lv.get("elliott_targets", {}) or {}
+
+                    reply = (
+                        f"🔎 วิเคราะห์ {symbol} | TF: {tf}\n"
+                        f"• แนวโน้ม: UP {pct.get('up',0)}% | DOWN {pct.get('down',0)}% | SIDE {pct.get('side',0)}%\n"
+                        f"• Key Levels:\n"
+                        f"   - Swing High: {fmt_num(lv.get('recent_high'))}\n"
+                        f"   - Swing Low : {fmt_num(lv.get('recent_low'))}\n"
+                        f"   - EMA50/200: {fmt_num(lv.get('ema50'))} / {fmt_num(lv.get('ema200'))}\n"
+                        f"   - Fibo 0.618 / 1.618: {fmt_num(fib.get('retr_0.618'))} / {fmt_num(fib.get('ext_1.618'))}\n"
+                        + (f"   - Elliott targets: {', '.join(f'{k}:{fmt_num(v)}' for k,v in el.items())}\n" if el else "")
+                    )
+                except FileNotFoundError:
+                    reply = "⚠️ ไม่พบไฟล์ข้อมูล: app/data/historical.xlsx"
+                except ValueError as e:
+                    reply = f"⚠️ ข้อมูลไม่พร้อม: {e}"
+                except Exception as e:
+                    reply = f"⚠️ เกิดข้อผิดพลาดระหว่างวิเคราะห์: {e}"
+
+                _reply_text(messaging_api, event.reply_token, reply)
+                continue
 
             # 0) ตั้ง/ยกเลิกแจ้งเตือนราคา (watch / unwatch)
             m = _WATCH_SET.match(user_text)
@@ -151,39 +213,6 @@ async def line_webhook(request: Request):
                 _reply_text(messaging_api, event.reply_token, mock_text)
                 continue
 
-            # 4) วิเคราะห์จริง: "วิเคราะห์ BTCUSDT 1H" / "analyze BTC 1D"
-            parsed = parse_analyze_command(user_text)
-            if parsed:
-                symbol, tf = parsed
-                try:
-                    df = get_data(symbol, tf)
-                    result = analyze_scenarios(df, symbol=symbol, tf=tf)
-
-                    pct = result.get("percent", {}) or {}
-                    lv = result.get("levels", {}) or {}
-                    fib = lv.get("fibo", {}) or {}
-                    el = lv.get("elliott_targets", {}) or {}
-
-                    reply = (
-                        f"🔎 วิเคราะห์ {symbol} | TF: {tf}\n"
-                        f"• แนวโน้ม: UP {pct.get('up',0)}% | DOWN {pct.get('down',0)}% | SIDE {pct.get('side',0)}%\n"
-                        f"• Key Levels:\n"
-                        f"   - Swing High: {fmt_num(lv.get('recent_high'))}\n"
-                        f"   - Swing Low : {fmt_num(lv.get('recent_low'))}\n"
-                        f"   - EMA50/200: {fmt_num(lv.get('ema50'))} / {fmt_num(lv.get('ema200'))}\n"
-                        f"   - Fibo 0.618 / 1.618: {fmt_num(fib.get('retr_0.618'))} / {fmt_num(fib.get('ext_1.618'))}\n"
-                        + (f"   - Elliott targets: {', '.join(f'{k}:{fmt_num(v)}' for k,v in el.items())}\n" if el else "")
-                    )
-                except FileNotFoundError:
-                    reply = "⚠️ ไม่พบไฟล์ข้อมูล: app/data/historical.xlsx"
-                except ValueError as e:
-                    reply = f"⚠️ ข้อมูลไม่พร้อม: {e}"
-                except Exception as e:
-                    reply = f"⚠️ เกิดข้อผิดพลาดระหว่างวิเคราะห์: {e}"
-
-                _reply_text(messaging_api, event.reply_token, reply)
-                continue
-
             # 5) ไม่เข้าเงื่อนไขใด ๆ → ส่งตัวช่วยใช้งาน
             helper = (
                 "สวัสดีครับ 👋 ตัวอย่างคำสั่ง:\n"
@@ -231,9 +260,7 @@ async def _handle_price(symbol: str) -> str:
 
 
 async def _maybe_async(func, *args, **kwargs):
-    """
-    รองรับทั้งฟังก์ชัน sync/async โดยไม่ต้องรู้ล่วงหน้า
-    """
+    """รองรับทั้งฟังก์ชัน sync/async โดยไม่ต้องรู้ล่วงหน้า"""
     import inspect
     if inspect.iscoroutinefunction(func):
         return await func(*args, **kwargs)
