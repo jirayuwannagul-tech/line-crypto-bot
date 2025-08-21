@@ -4,57 +4,77 @@ import pandas as pd
 import yfinance as yf
 
 OUT_PATH = "app/data/historical.xlsx"
-SYMBOL = "BTC-USD"  # ใช้สัญลักษณ์ของ Yahoo
+SYMBOL = "BTC-USD"  # สัญลักษณ์ของ Yahoo
 SHEETS = {
-    "BTCUSDT_1D": {"interval": "1d", "start": "2010-01-01"},
-    "BTCUSDT_1H": {"interval": "1h", "start": "2017-01-01"},
+    "BTCUSDT_1D": {"interval": "1d", "start": "2010-01-01"},  # 1D ใช้ period='max'
+    "BTCUSDT_1H": {"interval": "1h", "start": "2017-01-01"},  # 1H จำกัด ~729 วันล่าสุด
 }
 
 os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
 
 def _download(symbol: str, start: str, interval: str) -> pd.DataFrame:
     """
-    ดึงข้อมูลจาก yfinance
-    - บังคับ auto_adjust=False เพื่อให้มีคอลัมน์ Open/High/Low/Close/Volume ครบ
-    - ถ้าล้มเหลวแบบช่วงยาว ให้ไล่ดึงรายปีมารวมกัน
+    กติกา yfinance:
+      - 1d: ใช้ period='max' เพื่อดึงยาวสุด (ย้อนหลังยาว)
+      - 1h: ย้อนได้ ~729 วัน → บังคับ window ภายใน 729 วันล่าสุด และดึงเป็นชิ้น 30 วัน
     """
-    try:
-        df = yf.download(
-            symbol,
-            start=start,
-            interval=interval,
-            progress=False,
-            auto_adjust=False,  # 🔧 สำคัญ: ให้ได้ O/H/L/C/Adj Close/Volume
-        )
-        if not df.empty:
-            return df
-    except Exception:
-        pass
-
-    years = list(range(int(start[:4]), pd.Timestamp.utcnow().year + 1))
-    parts = []
-    for y in years:
-        s, e = f"{y}-01-01", f"{y}-12-31"
+    if interval == "1d":
+        # ดึงยาวสุด
         try:
-            part = yf.download(
-                symbol,
-                start=s,
-                end=e,
-                interval=interval,
-                progress=False,
-                auto_adjust=False,  # 🔧 เช่นกัน
+            df = yf.download(
+                symbol, period="max", interval="1d",
+                progress=False, auto_adjust=False
             )
-            if not part.empty:
-                parts.append(part)
+            if not df.empty:
+                return df
         except Exception:
-            continue
-    return pd.concat(parts).sort_index() if parts else pd.DataFrame()
+            pass
+        # fallback รายปี
+        years = list(range(int(start[:4]), pd.Timestamp.utcnow().year + 1))
+        parts = []
+        for y in years:
+            s, e = f"{y}-01-01", f"{y}-12-31"
+            try:
+                part = yf.download(
+                    symbol, start=s, end=e, interval="1d",
+                    progress=False, auto_adjust=False
+                )
+                if not part.empty:
+                    parts.append(part)
+            except Exception:
+                continue
+        return pd.concat(parts).sort_index() if parts else pd.DataFrame()
+
+    if interval in ("1h", "60m"):
+        now = pd.Timestamp.utcnow().tz_localize("UTC")
+        earliest_allowed = now - pd.Timedelta(days=729)
+        start_ts = max(pd.Timestamp(start).tz_localize("UTC"), earliest_allowed)
+
+        # ดึงเป็นช่วงละ 30 วัน (กัน response ว่าง)
+        parts = []
+        s = start_ts
+        while s < now:
+            e = min(s + pd.Timedelta(days=30), now)
+            try:
+                part = yf.download(
+                    symbol,
+                    start=s.tz_convert(None),
+                    end=e.tz_convert(None),
+                    interval="1h",
+                    progress=False,
+                    auto_adjust=False
+                )
+                if not part.empty:
+                    parts.append(part)
+            except Exception:
+                pass
+            s = e
+        return pd.concat(parts).sort_index() if parts else pd.DataFrame()
+
+    return pd.DataFrame()
 
 def _normalize(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    แปลงคอลัมน์ชื่อ → lower case มาตรฐาน และทำ timestamp (UTC)
-    กรองแถวที่ข้อมูลไม่ครบ/ไม่สมเหตุสมผล
-    """
+    """ปรับคอลัมน์, ทำ timestamp(UTC), คัดกรองความสมเหตุสมผล"""
     if df.empty:
         return df
 
@@ -64,22 +84,12 @@ def _normalize(df: pd.DataFrame) -> pd.DataFrame:
     else:
         idx = idx.tz_convert("UTC")
 
-    # yfinance (auto_adjust=False) จะได้คอลัมน์: Open, High, Low, Close, Adj Close, Volume
-    rename_map = {
-        "Open": "open",
-        "High": "high",
-        "Low": "low",
-        "Close": "close",
-        "Volume": "volume",
-    }
-    cols = {c: rename_map.get(c, c) for c in df.columns}
-    out = df.rename(columns=cols)
+    rename_map = {"Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"}
+    out = df.rename(columns={c: rename_map.get(c, c) for c in df.columns})
 
-    # เลือกเฉพาะที่ใช้งาน
     needed = ["open", "high", "low", "close", "volume"]
-    missing = [c for c in needed if c not in out.columns]
-    if missing:
-        return pd.DataFrame()  # ถ้าไม่ครบ ให้คืนว่างไปเลย ป้องกันพัง
+    if any(c not in out.columns for c in needed):
+        return pd.DataFrame()
 
     out = out[needed].copy()
     out.insert(0, "timestamp", pd.to_datetime(idx))
@@ -95,7 +105,7 @@ def _normalize(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 def _resample_ohlcv(df_1h: pd.DataFrame, rule: str) -> pd.DataFrame:
-    """สร้าง TF ที่ใหญ่ขึ้นจาก 1H (เช่น 4H)"""
+    """Resample จาก 1H ไป TF ใหญ่ (เช่น 4H)"""
     if df_1h.empty:
         return df_1h
     x = df_1h.set_index(pd.DatetimeIndex(df_1h["timestamp"], tz="UTC"))
@@ -113,7 +123,7 @@ def build_excel():
     with pd.ExcelWriter(OUT_PATH, engine="openpyxl") as writer:
         wrote_any = False
 
-        # 1D
+        # ----- 1D -----
         raw_1d = _download(SYMBOL, SHEETS["BTCUSDT_1D"]["start"], SHEETS["BTCUSDT_1D"]["interval"])
         df_1d = _normalize(raw_1d)
         if not df_1d.empty:
@@ -123,7 +133,7 @@ def build_excel():
         else:
             print("⚠️ BTCUSDT_1D: no data")
 
-        # 1H
+        # ----- 1H (+ 4H) -----
         raw_1h = _download(SYMBOL, SHEETS["BTCUSDT_1H"]["start"], SHEETS["BTCUSDT_1H"]["interval"])
         df_1h = _normalize(raw_1h)
         if not df_1h.empty:
@@ -131,7 +141,6 @@ def build_excel():
             wrote_any = True
             print(f"✅ BTCUSDT_1H rows={len(df_1h)}")
 
-            # 4H จาก 1H
             df_4h = _resample_ohlcv(df_1h, "4H")
             if not df_4h.empty:
                 df_4h.to_excel(writer, sheet_name="BTCUSDT_4H", index=False)
@@ -142,7 +151,6 @@ def build_excel():
         else:
             print("⚠️ BTCUSDT_1H: no data")
 
-        # ถ้าไม่มีชีตไหนถูกเขียนเลย ให้เขียนชีต EMPTY กัน openpyxl error
         if not wrote_any:
             pd.DataFrame({"msg": ["no data"]}).to_excel(writer, sheet_name="EMPTY", index=False)
             print("⚠️ No data written. Created EMPTY sheet.")
