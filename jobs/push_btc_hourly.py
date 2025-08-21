@@ -29,7 +29,7 @@ High={result['levels']['recent_high']:.2f} | Low={result['levels']['recent_low']
         """.strip()
 
         # 4) ส่งไป LINE
-        await push_text(LINE_TARGET, msg)
+        await push_text(LINE_TARGET = "Uc6abb9a104a3bc78e6627150c62fb962")
         print("[OK] pushed BTC report to LINE")
 
     except Exception as e:
