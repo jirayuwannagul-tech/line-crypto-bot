@@ -173,3 +173,77 @@ async def _reply_text(reply_token: str, text: str | List[str]) -> None:
             logging.warning("Reply API failed %s: %s", r.status_code, r.text)
         else:
             logging.info("Reply OK")
+
+        # === DEBUG: PUSH TEST ENDPOINT ===
+@router.post("/push-test")
+async def push_test(payload: Dict[str, Any]) -> Response:
+    """
+    ยิงทดสอบ PUSH โดยไม่ต้องใช้ replyToken
+
+    JSON ตัวอย่าง:
+    { "to": "Uxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "text": "🔔 BTC แจ้งเตือนทดสอบ 50,000" }
+    หรือหลายบรรทัด:
+    { "to": "U...", "text": ["🔔 กำลังเตือน...", "📈 BTC 50,000"] }
+    """
+    to = str(payload.get("to", "")).strip()
+    text = payload.get("text", None)
+
+    # validate input
+    if not to or text is None:
+        return Response(
+            status_code=400,
+            content=json.dumps({"error": "missing 'to' or 'text'"}),
+            media_type="application/json",
+        )
+
+    # ข้ามการยิงจริงเมื่อยังไม่ตั้งค่า Token
+    if not CHANNEL_ACCESS_TOKEN:
+        logger.warning("CHANNEL_ACCESS_TOKEN not set; skip push.")
+        return Response(
+            status_code=200,
+            content=json.dumps({"ok": True, "skipped": "no CHANNEL_ACCESS_TOKEN"}),
+            media_type="application/json",
+        )
+
+    # สร้าง message list ให้รองรับทั้ง str และ list[str]
+    if isinstance(text, str):
+        msgs = [{"type": "text", "text": text}]
+    elif isinstance(text, list):
+        msgs = [{"type": "text", "text": str(t)} for t in text if t is not None]
+        if not msgs:
+            return Response(
+                status_code=400,
+                content=json.dumps({"error": "empty 'text' list"}),
+                media_type="application/json",
+            )
+    else:
+        return Response(
+            status_code=400,
+            content=json.dumps({"error": "'text' must be string or list of strings"}),
+            media_type="application/json",
+        )
+
+    url = "https://api.line.me/v2/bot/message/push"
+    headers = {
+        "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    body = {"to": to, "messages": msgs}
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(url, headers=headers, json=body)
+        if r.status_code != 200:
+            logger.warning("Push API failed %s: %s", r.status_code, r.text)
+            # ส่งสถานะ/ข้อความจาก LINE กลับไปให้ดีบักง่าย
+            return Response(status_code=r.status_code, content=r.text, media_type="application/json")
+        logger.info("Push OK")
+        return Response(status_code=200, content=json.dumps({"ok": True}), media_type="application/json")
+    except Exception as e:
+        logger.exception("push-test failed: %s", e)
+        return Response(
+            status_code=500,
+            content=json.dumps({"ok": False, "error": str(e)}),
+            media_type="application/json",
+        )
+
