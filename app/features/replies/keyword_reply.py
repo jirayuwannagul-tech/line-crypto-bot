@@ -3,10 +3,12 @@ Layer สำหรับ mapping คีย์เวิร์ด → คำตอ
 - KEYWORD_MAP  : เก็บ mapping คีย์เวิร์ดแบบ fix เช่น "สวัสดี" → "ทักควยไรวะ 🤔"
 - get_reply()  : ถ้าข้อความตรงกับ key ใน KEYWORD_MAP → ส่งข้อความตอบกลับ
 - parse_price_command() : ตรวจจับคำสั่ง "ราคา XXX" / "price XXX" → คืน symbol เช่น BTCUSDT
+- parse_analysis_mock() : ตรวจจับ 'mock' หรือ 'วิเคราะห์ mock'
+- parse_analyze_command() : ตรวจจับ 'วิเคราะห์ BTCUSDT 1H'
 """
 
-from typing import Optional
 import re
+from typing import Optional
 
 # === Keyword mapping (ข้อความโต้ตอบทั่วไป) ===
 KEYWORD_MAP = {
@@ -44,16 +46,11 @@ KEYWORD_MAP = {
     "บิน": "บินทีไร ตกรถทุกที ✈️",
     "เข้าไม่ทัน": "เข้าไม่ทันก็ยืนมองกราฟอย่างเดียวละกัน 👀",
     "แทงสวน": "แทงสวนทีไร โดนเหยียบจมดินทุกที 🤯",
-    
-    
 }
 
+
 def get_reply(text: str) -> Optional[str]:
-    """
-    Mapping ข้อความ → คำตอบ (ตาม KEYWORD_MAP)
-    ถ้าเจอ key ตรง → return ข้อความตอบ
-    ถ้าไม่เจอ → return None
-    """
+    """Mapping ข้อความ → คำตอบ (ตาม KEYWORD_MAP)"""
     if not text:
         return None
     normalized = text.strip().lower()
@@ -61,6 +58,7 @@ def get_reply(text: str) -> Optional[str]:
         if normalized == key.lower():
             return reply
     return None
+
 
 # === ฟังก์ชันเสริม: ตรวจจับคำสั่งขอราคา ===
 _PRICE_CMD = re.compile(r'^(?:ราคา|price)\s*([A-Za-z]{3,10})(?:/USDT|USDT)?$', re.IGNORECASE)
@@ -82,17 +80,50 @@ def parse_price_command(text: str) -> Optional[str]:
         return None
     base = m.group(1).upper()
     return base if base.endswith("USDT") else f"{base}USDT"
-# --- MOCK analysis command parser (วางเพิ่มท้ายไฟล์) ---
-import re as _re
 
-_ANALYZE_MOCK = _re.compile(r'^(?:mock|วิเคราะห์\s*mock)\s*$', _re.IGNORECASE)
+
+# === ฟังก์ชันเสริม: mock analysis ===
+_ANALYZE_MOCK = re.compile(r'^(?:mock|วิเคราะห์\s*mock)\s*$', re.IGNORECASE)
 
 def parse_analysis_mock(text: str) -> bool:
-    """
-    คืน True ถ้าผู้ใช้พิมพ์ 'mock' หรือ 'วิเคราะห์ mock'
-    ใช้สำหรับสั่งให้บอทตอบผลวิเคราะห์จำลอง (ไม่ใช้ราคา API จริง)
-    """
+    """คืน True ถ้าผู้ใช้พิมพ์ 'mock' หรือ 'วิเคราะห์ mock'"""
     if not text:
         return False
     return _ANALYZE_MOCK.search(text.strip()) is not None
 
+
+# === ฟังก์ชันเสริม: วิเคราะห์จริง <symbol> <tf> ===
+_TIMEFRAME_MAP = {
+    "1h": "1H", "1hr": "1H", "1hrs": "1H",
+    "4h": "4H", "4hr": "4H", "4hrs": "4H", "4hours": "4H",
+    "1d": "1D", "1day": "1D",
+    "1H": "1H", "4H": "4H", "1D": "1D",
+}
+
+_ANALYZE_CMD = re.compile(
+    r"^(?:วิเคราะห์|analyze)\s+([A-Za-z0-9:/._-]+)\s+([0-9]+[HhDd][A-Za-z]*)$",
+    re.IGNORECASE
+)
+
+def parse_analyze_command(text: str) -> Optional[tuple[str, str]]:
+    """
+    ตรวจจับคำสั่งวิเคราะห์ เช่น:
+      'วิเคราะห์ BTCUSDT 1H'
+      'analyze BTC 1d'
+      'วิเคราะห์ BTC/USDT 4h'
+    คืนค่า (symbol, tf) โดย normalize symbol และ tf
+    """
+    if not text:
+        return None
+    m = _ANALYZE_CMD.match(text.strip())
+    if not m:
+        return None
+
+    raw_symbol = m.group(1).upper().replace(":", "").replace("/", "")
+    raw_tf = m.group(2)
+    tf_key = raw_tf.strip()
+    tf_norm = _TIMEFRAME_MAP.get(tf_key, _TIMEFRAME_MAP.get(tf_key.lower()))
+    if tf_norm not in ("1H", "4H", "1D"):
+        return None
+
+    return raw_symbol, tf_norm
