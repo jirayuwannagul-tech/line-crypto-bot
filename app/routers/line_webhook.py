@@ -31,10 +31,10 @@ from linebot.v3.messaging import (
     TextMessage as LineTextMessage,
 )
 from linebot.v3.webhooks import (
-    WebhookParser,
     MessageEvent,
     TextMessageContent,
 )
+from linebot.v3.webhook import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
 
 router = APIRouter()
@@ -43,15 +43,19 @@ router = APIRouter()
 CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "")
 CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
 
-# สร้าง parser และ config ของ LINE (ปล่อยว่างไว้ก่อนถ้าไม่มี env)
-_parser: Optional[WebhookParser] = WebhookParser(CHANNEL_SECRET) if CHANNEL_SECRET else None
-_config: Optional[Configuration] = Configuration(access_token=CHANNEL_ACCESS_TOKEN) if CHANNEL_ACCESS_TOKEN else None
+if not CHANNEL_SECRET or not CHANNEL_ACCESS_TOKEN:
+    # ให้ error ชัดเจนตอนสตาร์ท
+    missing = []
+    if not CHANNEL_SECRET:
+        missing.append("LINE_CHANNEL_SECRET")
+    if not CHANNEL_ACCESS_TOKEN:
+        missing.append("LINE_CHANNEL_ACCESS_TOKEN")
+    raise RuntimeError(f"Missing ENV: {', '.join(missing)}")
+
+# ====== LINE Handler ======
+handler = WebhookHandler(CHANNEL_SECRET)
 
 # ====== คำสั่งตั้ง/ยกเลิกแจ้งเตือนราคา ======
-# ตัวอย่าง:
-#   "ตั้งเข้า BTCUSDT 60000"         → tol=0
-#   "watch btc 60000 tol=50"         → tol=50
-#   "ยกเลิกเข้า BTCUSDT" / "unwatch btc"
 _WATCH_SET = re.compile(
     r"^(?:ตั้งเข้า|watch)\s+([A-Za-z0-9:/._-]+)\s+([0-9]+(?:\.[0-9]+)?)(?:\s+tol=(\d+(?:\.\d+)?))?$",
     re.IGNORECASE,
@@ -79,7 +83,7 @@ def _quick_parse_analyze(text: str):
     sym_raw = m.group(1)
     tf_raw  = (m.group(2) or "").strip()
     symbol = _norm_symbol(sym_raw)
-    if symbol in ("BTC", "XBT"):  # ปรับได้ตามที่ใช้จริง
+    if symbol in ("BTC", "XBT"):
         symbol = "BTCUSDT"
     tf_map = {
         "1H":"1H", "4H":"4H", "1D":"1D", "1W":"1W",
@@ -90,146 +94,8 @@ def _quick_parse_analyze(text: str):
     tf = tf_map.get(tf_raw.upper(), "1D") if tf_raw else "1D"
     return (symbol, tf)
 
-
-# NOTE: main.py include_router(..., prefix="/line")
-# ดังนั้น path ที่นี่ใช้ "/webhook" ให้ลงตัวเป็น /line/webhook
-@router.post("/webhook")
-async def line_webhook(request: Request):
-    """
-    LINE webhook entrypoint:
-    - ตรวจลายเซ็นต์
-    - ไล่ events และตอบตาม logic
-    """
-    if _parser is None or _config is None:
-        raise HTTPException(status_code=500, detail="LINE credentials are not configured")
-
-    signature = request.headers.get("x-line-signature")
-    if not signature:
-        raise HTTPException(status_code=400, detail="Missing X-Line-Signature")
-
-    body_bytes = await request.body()
-    body_text = body_bytes.decode("utf-8")
-
-    try:
-        events = _parser.parse(body_text, signature)
-    except InvalidSignatureError:
-        raise HTTPException(status_code=401, detail="Invalid signature")
-
-    # ใช้ ApiClient ต่อครั้ง (short-lived)
-    with ApiClient(_config) as api_client:
-        messaging_api = MessagingApi(api_client)
-
-        for event in events:
-            if not isinstance(event, MessageEvent):
-                continue
-            if not isinstance(event.message, TextMessageContent):
-                continue
-
-            user_text = (event.message.text or "").strip()
-            user_id = getattr(event.source, "user_id", None)
-
-            # 0.5) วิเคราะห์จริง (ดักก่อน get_reply เพื่อไม่โดนกลืน)
-            parsed = _quick_parse_analyze(user_text) or parse_analyze_command(user_text)
-            if parsed:
-                symbol, tf = parsed
-                try:
-                    df = get_data(symbol, tf)
-                    result = analyze_scenarios(df, symbol=symbol, tf=tf)
-
-                    pct = result.get("percent", {}) or {}
-                    lv = result.get("levels", {}) or {}
-                    fib = lv.get("fibo", {}) or {}
-                    el = lv.get("elliott_targets", {}) or {}
-
-                    reply = (
-                        f"🔎 วิเคราะห์ {symbol} | TF: {tf}\n"
-                        f"• แนวโน้ม: UP {pct.get('up',0)}% | DOWN {pct.get('down',0)}% | SIDE {pct.get('side',0)}%\n"
-                        f"• Key Levels:\n"
-                        f"   - Swing High: {fmt_num(lv.get('recent_high'))}\n"
-                        f"   - Swing Low : {fmt_num(lv.get('recent_low'))}\n"
-                        f"   - EMA50/200: {fmt_num(lv.get('ema50'))} / {fmt_num(lv.get('ema200'))}\n"
-                        f"   - Fibo 0.618 / 1.618: {fmt_num(fib.get('retr_0.618'))} / {fmt_num(fib.get('ext_1.618'))}\n"
-                        + (f"   - Elliott targets: {', '.join(f'{k}:{fmt_num(v)}' for k,v in el.items())}\n" if el else "")
-                    )
-                except FileNotFoundError:
-                    reply = "⚠️ ไม่พบไฟล์ข้อมูล: app/data/historical.xlsx"
-                except ValueError as e:
-                    reply = f"⚠️ ข้อมูลไม่พร้อม: {e}"
-                except Exception as e:
-                    reply = f"⚠️ เกิดข้อผิดพลาดระหว่างวิเคราะห์: {e}"
-
-                _reply_text(messaging_api, event.reply_token, reply)
-                continue
-
-            # 0) ตั้ง/ยกเลิกแจ้งเตือนราคา (watch / unwatch)
-            m = _WATCH_SET.match(user_text)
-            if user_id and m:
-                sym = _norm_symbol(m.group(1))
-                entry = float(m.group(2))
-                tol = float(m.group(3)) if m.group(3) else 0.0
-                add_watch(user_id, sym, entry, tol)
-                _reply_text(
-                    messaging_api,
-                    event.reply_token,
-                    f"✅ ตั้งแจ้งเตือน {sym}\n• Entry: {fmt_num(entry)}\n• Tol: ±{fmt_num(tol)}",
-                )
-                continue
-
-            m = _WATCH_DEL.match(user_text)
-            if user_id and m:
-                sym = _norm_symbol(m.group(1))
-                ok = remove_watch(user_id, sym)
-                _reply_text(
-                    messaging_api,
-                    event.reply_token,
-                    f"{'🗑️ ยกเลิก' if ok else 'ℹ️ ไม่พบ'} การแจ้งเตือน {sym}",
-                )
-                continue
-
-            # 1) แมพปิ้งข้อความทั่วไป
-            mapped = get_reply(user_text)
-            if mapped:
-                _reply_text(messaging_api, event.reply_token, mapped)
-                continue
-
-            # 2) คำสั่งราคา: "ราคา BTC" / "price eth"
-            symbol_price = parse_price_command(user_text)
-            if symbol_price:
-                price_text = await _handle_price(symbol_price)
-                _reply_text(messaging_api, event.reply_token, price_text)
-                continue
-
-            # 3) คำสั่ง mock: "mock" / "วิเคราะห์ mock"
-            if parse_analysis_mock(user_text):
-                mock_text = (
-                    "🧪 MOCK ANALYSIS\n"
-                    "UP 40% | DOWN 35% | SIDE 25%\n"
-                    "Key Levels:\n"
-                    " - SwingH: 60,500\n - SwingL: 58,200\n"
-                    " - EMA50/200: 59,800 / 57,900\n"
-                    " - Fibo 0.618 / 1.618: 59,200 / 61,400\n"
-                    "หมายเหตุ: ข้อมูลจำลองเพื่อทดสอบเท่านั้น"
-                )
-                _reply_text(messaging_api, event.reply_token, mock_text)
-                continue
-
-            # 5) ไม่เข้าเงื่อนไขใด ๆ → ส่งตัวช่วยใช้งาน
-            helper = (
-                "สวัสดีครับ 👋 ตัวอย่างคำสั่ง:\n"
-                "• ราคา BTC\n"
-                "• วิเคราะห์ BTCUSDT 1H\n"
-                "• ตั้งเข้า BTCUSDT 60000 (หรือ watch btc 60000 tol=50)\n"
-                "• ยกเลิกเข้า BTCUSDT (หรือ unwatch btc)\n"
-                "• mock"
-            )
-            _reply_text(messaging_api, event.reply_token, helper)
-
-    return PlainTextResponse("OK")
-
-
 def _norm_symbol(s: str) -> str:
     return s.upper().replace(":", "").replace("/", "")
-
 
 def _reply_text(api: MessagingApi, reply_token: str, text: str) -> None:
     # กันข้อความยาวเกิน 5000
@@ -242,31 +108,6 @@ def _reply_text(api: MessagingApi, reply_token: str, text: str) -> None:
         )
     )
 
-
-async def _handle_price(symbol: str) -> str:
-    """
-    ดึงราคาแบบยืดหยุ่น:
-    - ถ้า project มี provider → เรียกใช้
-    - ถ้าล้มเหลว → แจ้งเตือนผู้ใช้
-    """
-    try:
-        from app.adapters.price_provider import get_price  # type: ignore
-        px = await _maybe_async(get_price, symbol)
-        if px is not None:
-            return f"📈 {symbol}\nราคา: {fmt_num(px)}"
-    except Exception:
-        pass
-    return f"⚠️ ยังไม่พร้อมดึงราคา {symbol} (โปรดตรวจสอบ PRICE_PROVIDER หรือ provider function)."
-
-
-async def _maybe_async(func, *args, **kwargs):
-    """รองรับทั้งฟังก์ชัน sync/async โดยไม่ต้องรู้ล่วงหน้า"""
-    import inspect
-    if inspect.iscoroutinefunction(func):
-        return await func(*args, **kwargs)
-    return func(*args, **kwargs)
-
-
 def fmt_num(val) -> str:
     """ฟอร์แมตตัวเลขอ่านง่าย"""
     try:
@@ -278,3 +119,154 @@ def fmt_num(val) -> str:
     if abs(x) >= 1:
         return f"{x:.4f}"
     return f"{x:.6f}"
+
+def _handle_price_sync(symbol: str) -> str:
+    """
+    เวอร์ชัน synchronous (หลีกเลี่ยง await ใน handler ของ LINE)
+    """
+    try:
+        from app.adapters.price_provider import get_price  # type: ignore
+        import inspect, asyncio
+        if inspect.iscoroutinefunction(get_price):
+            try:
+                # พยายามรันแบบแยก event loop
+                px = asyncio.run(get_price(symbol))
+            except RuntimeError:
+                # เผื่ออยู่ใน event loop แล้ว ให้ fallback เป็นข้อมูลไม่พร้อม
+                return f"⚠️ ยังไม่พร้อมดึงราคา {symbol} (provider เป็น async โปรดใช้ผ่าน endpoint)"
+        else:
+            px = get_price(symbol)
+        if px is not None:
+            return f"📈 {symbol}\nราคา: {fmt_num(px)}"
+    except Exception:
+        pass
+    return f"⚠️ ยังไม่พร้อมดึงราคา {symbol} (โปรดตรวจสอบ PRICE_PROVIDER หรือ provider function)."
+
+# ====== LINE Event Handlers ======
+@handler.add(MessageEvent, message=TextMessageContent)
+def on_message(event: MessageEvent):
+    user_text = (event.message.text or "").strip()
+    user_id = getattr(event.source, "user_id", None)
+
+    # เตรียม client รายครั้ง
+    config = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
+    with ApiClient(config) as api_client:
+        api = MessagingApi(api_client)
+
+        # 0.5) วิเคราะห์จริง (ทำก่อน get_reply เพื่อไม่โดนกลืน)
+        parsed = _quick_parse_analyze(user_text) or parse_analyze_command(user_text)
+        if parsed:
+            symbol, tf = parsed
+            try:
+                df = get_data(symbol, tf)
+                result = analyze_scenarios(df, symbol=symbol, tf=tf)
+
+                pct = result.get("percent", {}) or {}
+                lv = result.get("levels", {}) or {}
+                fib = lv.get("fibo", {}) or {}
+                el = lv.get("elliott_targets", {}) or {}
+
+                reply = (
+                    f"🔎 วิเคราะห์ {symbol} | TF: {tf}\n"
+                    f"• แนวโน้ม: UP {pct.get('up',0)}% | DOWN {pct.get('down',0)}% | SIDE {pct.get('side',0)}%\n"
+                    f"• Key Levels:\n"
+                    f"   - Swing High: {fmt_num(lv.get('recent_high'))}\n"
+                    f"   - Swing Low : {fmt_num(lv.get('recent_low'))}\n"
+                    f"   - EMA50/200: {fmt_num(lv.get('ema50'))} / {fmt_num(lv.get('ema200'))}\n"
+                    f"   - Fibo 0.618 / 1.618: {fmt_num(fib.get('retr_0.618'))} / {fmt_num(fib.get('ext_1.618'))}\n"
+                    + (f"   - Elliott targets: {', '.join(f'{k}:{fmt_num(v)}' for k,v in el.items())}\n" if el else "")
+                )
+            except FileNotFoundError:
+                reply = "⚠️ ไม่พบไฟล์ข้อมูล: app/data/historical.xlsx"
+            except ValueError as e:
+                reply = f"⚠️ ข้อมูลไม่พร้อม: {e}"
+            except Exception as e:
+                reply = f"⚠️ เกิดข้อผิดพลาดระหว่างวิเคราะห์: {e}"
+
+            _reply_text(api, event.reply_token, reply)
+            return
+
+        # 0) ตั้ง/ยกเลิกแจ้งเตือนราคา (watch / unwatch)
+        m = _WATCH_SET.match(user_text)
+        if user_id and m:
+            sym = _norm_symbol(m.group(1))
+            entry = float(m.group(2))
+            tol = float(m.group(3)) if m.group(3) else 0.0
+            add_watch(user_id, sym, entry, tol)
+            _reply_text(
+                api,
+                event.reply_token,
+                f"✅ ตั้งแจ้งเตือน {sym}\n• Entry: {fmt_num(entry)}\n• Tol: ±{fmt_num(tol)}",
+            )
+            return
+
+        m = _WATCH_DEL.match(user_text)
+        if user_id and m:
+            sym = _norm_symbol(m.group(1))
+            ok = remove_watch(user_id, sym)
+            _reply_text(
+                api,
+                event.reply_token,
+                f"{'🗑️ ยกเลิก' if ok else 'ℹ️ ไม่พบ'} การแจ้งเตือน {sym}",
+            )
+            return
+
+        # 1) แมพปิ้งข้อความทั่วไป
+        mapped = get_reply(user_text)
+        if mapped:
+            _reply_text(api, event.reply_token, mapped)
+            return
+
+        # 2) คำสั่งราคา: "ราคา BTC" / "price eth"
+        symbol_price = parse_price_command(user_text)
+        if symbol_price:
+            price_text = _handle_price_sync(symbol_price)
+            _reply_text(api, event.reply_token, price_text)
+            return
+
+        # 3) คำสั่ง mock: "mock" / "วิเคราะห์ mock"
+        if parse_analysis_mock(user_text):
+            mock_text = (
+                "🧪 MOCK ANALYSIS\n"
+                "UP 40% | DOWN 35% | SIDE 25%\n"
+                "Key Levels:\n"
+                " - SwingH: 60,500\n - SwingL: 58,200\n"
+                " - EMA50/200: 59,800 / 57,900\n"
+                " - Fibo 0.618 / 1.618: 59,200 / 61,400\n"
+                "หมายเหตุ: ข้อมูลจำลองเพื่อทดสอบเท่านั้น"
+            )
+            _reply_text(api, event.reply_token, mock_text)
+            return
+
+        # 5) ไม่เข้าเงื่อนไขใด ๆ → ส่งตัวช่วยใช้งาน
+        helper = (
+            "สวัสดีครับ 👋 ตัวอย่างคำสั่ง:\n"
+            "• ราคา BTC\n"
+            "• วิเคราะห์ BTCUSDT 1H\n"
+            "• ตั้งเข้า BTCUSDT 60000 (หรือ watch btc 60000 tol=50)\n"
+            "• ยกเลิกเข้า BTCUSDT (หรือ unwatch btc)\n"
+            "• mock"
+        )
+        _reply_text(api, event.reply_token, helper)
+
+
+# NOTE: main.py include_router(..., prefix="/line")
+# ดังนั้น path ที่นี่ใช้ "/webhook" ให้ลงตัวเป็น /line/webhook
+@router.post("/webhook")
+async def line_webhook(request: Request):
+    """
+    LINE webhook entrypoint (ใช้ WebhookHandler ของ SDK v3)
+    """
+    signature = request.headers.get("x-line-signature")
+    if not signature:
+        raise HTTPException(status_code=400, detail="Missing X-Line-Signature")
+
+    body_bytes = await request.body()
+    body_text = body_bytes.decode("utf-8")
+
+    try:
+        handler.handle(body_text, signature)
+    except InvalidSignatureError:
+        raise HTTPException(status_code=401, detail="Invalid signature")
+
+    return PlainTextResponse("OK")
