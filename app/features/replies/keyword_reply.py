@@ -1,12 +1,14 @@
-# app/features/replies/keyword_reply.py
 """
 Layer สำหรับ mapping คีย์เวิร์ด → คำตอบ
-สามารถแก้ไข / เพิ่มเติมได้ในที่เดียว
+- KEYWORD_MAP  : เก็บ mapping คีย์เวิร์ดแบบ fix เช่น "สวัสดี" → "ทักควยไรวะ 🤔"
+- get_reply()  : ถ้าข้อความตรงกับ key ใน KEYWORD_MAP → ส่งข้อความตอบกลับ
+- parse_price_command() : ตรวจจับคำสั่ง "ราคา XXX" / "price XXX" → คืน symbol เช่น BTCUSDT
 """
 
 from typing import Optional
+import re
 
-# === Keyword mapping ===
+# === Keyword mapping (ข้อความโต้ตอบทั่วไป) ===
 KEYWORD_MAP = {
     # ===== ชุดทักทายกวนๆ =====
     "สวัสดี": "ทักควยไรวะ 🤔",
@@ -48,18 +50,37 @@ KEYWORD_MAP = {
     "แทงสวน": "แทงสวนทีไร โดนเหยียบจมดินทุกที 🤯",
 }
 
-
-
 def get_reply(text: str) -> Optional[str]:
     """
-    ถ้าเจอคีย์เวิร์ดที่ match → ส่งข้อความตอบกลับ
+    Mapping ข้อความ → คำตอบ (ตาม KEYWORD_MAP)
+    ถ้าเจอ key ตรง → return ข้อความตอบ
     ถ้าไม่เจอ → return None
     """
     if not text:
         return None
-
     normalized = text.strip().lower()
     for key, reply in KEYWORD_MAP.items():
         if normalized == key.lower():
             return reply
     return None
+
+# === ฟังก์ชันเสริม: ตรวจจับคำสั่งขอราคา ===
+_PRICE_CMD = re.compile(r'^(?:ราคา|price)\s*([A-Za-z]{3,10})(?:/USDT|USDT)?$', re.IGNORECASE)
+
+def parse_price_command(text: str) -> Optional[str]:
+    """
+    ตรวจข้อความ ถ้า match pattern 'ราคา XXX' หรือ 'price XXX'
+    → return symbol เป็น XXXUSDT
+    เช่น:
+      'ราคา BTC' → 'BTCUSDT'
+      'price eth' → 'ETHUSDT'
+      'ราคา BTCUSDT' → 'BTCUSDT'
+    ถ้าไม่ match → return None
+    """
+    if not text:
+        return None
+    m = _PRICE_CMD.search(text.strip())
+    if not m:
+        return None
+    base = m.group(1).upper()
+    return base if base.endswith("USDT") else f"{base}USDT"
