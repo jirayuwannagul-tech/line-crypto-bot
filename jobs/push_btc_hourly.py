@@ -3,7 +3,7 @@ import asyncio
 from datetime import datetime
 
 from app.analysis.scenarios import analyze_scenarios
-from app.adapters.delivery_line import push_message
+from app.adapters.delivery_line import push_text   # ✅ ใช้ push_text
 
 # 👉 ใส่ LINE USER_ID / GROUP_ID ของคุณ
 LINE_TARGET = "<YOUR_LINE_USER_ID>"
@@ -23,8 +23,8 @@ MACD={result['macd']:.2f} | Signal={result['signal']:.2f} | Hist={result['hist']
 Support≈{result['support']:.2f} | Resistance≈{result['resistance']:.2f}
         """
 
-        # 3) ส่งไป LINE
-        push_message(LINE_TARGET, msg.strip())
+        # 3) ส่งไป LINE (async)
+        await push_text(LINE_TARGET, msg.strip())
 
         print("[OK] pushed BTC report to LINE")
 
