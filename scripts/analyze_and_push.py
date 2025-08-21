@@ -1,6 +1,8 @@
+
 # วิเคราะห์ BTC แล้วส่งผลไป LINE (push)
 # ใช้ ENV: LINE_CHANNEL_ACCESS_TOKEN, LINE_USER_ID
 # ใช้: python scripts/analyze_and_push.py --symbol BTCUSDT --tf 1D
+
 
 import os, argparse
 from app.analysis.timeframes import get_data
