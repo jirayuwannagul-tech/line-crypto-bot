@@ -174,7 +174,8 @@ async def _reply_text(reply_token: str, text: str | List[str]) -> None:
         else:
             logging.info("Reply OK")
 
-        # === DEBUG: PUSH TEST ENDPOINT ===
+
+# === DEBUG: PUSH TEST ENDPOINT ===
 @router.post("/push-test")
 async def push_test(payload: Dict[str, Any]) -> Response:
     """
@@ -246,4 +247,3 @@ async def push_test(payload: Dict[str, Any]) -> Response:
             content=json.dumps({"ok": False, "error": str(e)}),
             media_type="application/json",
         )
-
