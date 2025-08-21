@@ -1,4 +1,3 @@
-# app/routers/line_webhook.py
 import os
 import json
 import hmac
@@ -10,10 +9,15 @@ from typing import Any, Dict
 import httpx
 from fastapi import APIRouter, Request, Header, Response
 
-# 🔹 keyword reply
-from app.features.replies.keyword_reply import get_reply
+# 🔹 keyword reply + parse price
+from app.features.replies.keyword_reply import get_reply, parse_price_command
 # 🔹 wave analysis service
 from app.services.wave_service import analyze_wave, build_brief_message
+# 🔹 price resolver
+from app.utils.crypto_price import resolver
+# 🔹 mock analysis tools
+import numpy as np, pandas as pd
+from app.analysis.scenarios import analyze_scenarios
 
 router = APIRouter(tags=["line"])
 
@@ -61,7 +65,7 @@ async def line_webhook(
 
                 reply_text = None
 
-                # --- Integration: check if user typed "analyze SYMBOL TF"
+                # --- Integration: analyze SYMBOL TF ---
                 if text.lower().startswith("analyze"):
                     parts = text.split()
                     if len(parts) >= 3:
@@ -75,6 +79,54 @@ async def line_webhook(
                             reply_text = f"❌ วิเคราะห์ไม่สำเร็จ: {e}"
                     else:
                         reply_text = "ใช้รูปแบบ: analyze SYMBOL TF\nเช่น: analyze BTCUSDT 1D"
+
+                # --- ราคา <symbol> ---
+                if not reply_text:
+                    symbol = parse_price_command(text)
+                    if symbol:
+                        try:
+                            price = None
+                            if hasattr(resolver, "price") and callable(getattr(resolver, "price")):
+                                maybe = resolver.price(symbol)
+                                price = (await maybe) if hasattr(maybe, "__await__") else maybe
+                            elif hasattr(resolver, "get") and callable(getattr(resolver, "get")):
+                                price = resolver.get(symbol)
+                            elif hasattr(resolver, "resolve") and callable(getattr(resolver, "resolve")):
+                                price = resolver.resolve(symbol)
+                        except Exception as e:
+                            logger.warning("resolver error: %s", e)
+                            price = None
+
+                        if price is not None:
+                            reply_text = f"📈 {symbol}\nราคา: {float(price):,.2f}"
+                        else:
+                            reply_text = f"ขอโทษครับ ดึงราคา {symbol} ไม่ได้"
+
+                # --- MOCK วิเคราะห์ ---
+                if not reply_text and text.lower().strip() in {"mock", "วิเคราะห์ mock"}:
+                    try:
+                        np.random.seed(0)
+                        close = np.cumsum(np.random.randn(150)) + 50000
+                        high  = close + np.abs(np.random.randn(150)) * 50
+                        low   = close - np.abs(np.random.randn(150)) * 50
+                        open_ = close + np.random.randn(150)
+                        vol   = np.random.randint(100, 1000, size=150)
+
+                        df = pd.DataFrame({
+                            "open": open_, "high": high, "low": low, "close": close, "volume": vol
+                        })
+                        payload = analyze_scenarios(df, symbol="BTCUSDT", tf="1D")
+                        pct = payload.get("percent", {})
+                        lv  = payload.get("levels", {})
+                        reply_text = (
+                            "🧪 MOCK ANALYSIS (BTCUSDT 1D)\n"
+                            f"↑ {pct.get('up',0)}%  ↓ {pct.get('down',0)}%  ↔ {pct.get('side',0)}%\n"
+                            f"RH: {lv.get('recent_high', None):,.2f} | RL: {lv.get('recent_low', None):,.2f}\n"
+                            f"EMA50: {lv.get('ema50', None):,.2f}"
+                        )
+                    except Exception as e:
+                        logger.exception("mock analysis failed")
+                        reply_text = f"❌ วิเคราะห์ mock ไม่สำเร็จ: {e}"
 
                 # --- Otherwise: keyword reply
                 if not reply_text:

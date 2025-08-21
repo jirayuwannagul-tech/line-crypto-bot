@@ -84,3 +84,17 @@ def parse_price_command(text: str) -> Optional[str]:
         return None
     base = m.group(1).upper()
     return base if base.endswith("USDT") else f"{base}USDT"
+# --- MOCK analysis command parser (วางเพิ่มท้ายไฟล์) ---
+import re as _re
+
+_ANALYZE_MOCK = _re.compile(r'^(?:mock|วิเคราะห์\s*mock)\s*$', _re.IGNORECASE)
+
+def parse_analysis_mock(text: str) -> bool:
+    """
+    คืน True ถ้าผู้ใช้พิมพ์ 'mock' หรือ 'วิเคราะห์ mock'
+    ใช้สำหรับสั่งให้บอทตอบผลวิเคราะห์จำลอง (ไม่ใช้ราคา API จริง)
+    """
+    if not text:
+        return False
+    return _ANALYZE_MOCK.search(text.strip()) is not None
+
