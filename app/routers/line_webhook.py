@@ -141,12 +141,31 @@ async def line_webhook(
 
 
 async def _reply_text(reply_token: str, text: str) -> None:
-    """เรียก LINE reply API"""
-    if not CHANNEL_ACCESS_TOKEN:
-        logging.warning("CHANNEL_ACCESS_TOKEN not set; skip reply.")
+    """เรียก LINE reply API (ข้ามเมื่อเป็น token ทดสอบ/ไม่มี ACCESS TOKEN)"""
+    # ข้ามเมื่อยังไม่ตั้ง token หรือเป็น token จำลอง
+    if not CHANNEL_ACCESS_TOKEN or reply_token in {"DUMMY", "TEST_REPLY_TOKEN"} or reply_token.startswith("DUMMY"):
+        logging.warning("Skip reply (test mode). token=%s text=%s", reply_token, text)
         return
 
     url = "https://api.line.me/v2/bot/message/reply"
+    headers = {
+        "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "replyToken": reply_token,
+        "messages": [{"type": "text", "text": text}],
+    }
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.post(url, headers=headers, json=body)
+        if r.status_code == 400 and "Invalid reply token" in r.text:
+            logging.warning("Skip reply (invalid/expired token).")
+            return
+        if r.status_code != 200:
+            logging.warning("Reply API failed %s: %s", r.status_code, r.text)
+        else:
+            logging.info("Reply OK")
+
     headers = {
         "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}",
         "Content-Type": "application/json",
