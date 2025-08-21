@@ -6,7 +6,8 @@ from app.analysis.timeframes import get_data
 from app.analysis.scenarios import analyze_scenarios
 from app.adapters.delivery_line import push_text  # ✅ ใช้ delivery_line ไม่ใช่ client
 
-LINE_TARGET = "YOUR_LINE_USER_ID"  # 👉 ตั้งค่า User ID หรือ Group ID
+# 👉 ใส่ LINE USER_ID หรือ GROUP_ID ของคุณ
+LINE_TARGET = "Uc6abb9a104a3bc78e6627150c62fb962"
 
 
 async def push_btc():
@@ -29,7 +30,8 @@ High={result['levels']['recent_high']:.2f} | Low={result['levels']['recent_low']
         """.strip()
 
         # 4) ส่งไป LINE
-        await push_text(LINE_TARGET = "Uc6abb9a104a3bc78e6627150c62fb962")
+        await push_text(LINE_TARGET, msg)
+
         print("[OK] pushed BTC report to LINE")
 
     except Exception as e:
