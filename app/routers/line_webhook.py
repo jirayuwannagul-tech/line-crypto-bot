@@ -1,22 +1,24 @@
+# app/routers/line_webhook.py
 import os
 import json
 import hmac
 import base64
 import hashlib
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import httpx
 from fastapi import APIRouter, Request, Header, Response
 
-# 🔹 keyword reply + parse price
+# 🔹 keyword reply + คำสั่งราคา
 from app.features.replies.keyword_reply import get_reply, parse_price_command
-# 🔹 wave analysis service
+# 🔹 วิเคราะห์จริง (service เดิมของโปรเจกต์)
 from app.services.wave_service import analyze_wave, build_brief_message
-# 🔹 price resolver
+# 🔹 ตัวดึงราคา (resolver)
 from app.utils.crypto_price import resolver
-# 🔹 mock analysis tools
-import numpy as np, pandas as pd
+# 🔹 MOCK วิเคราะห์ (ข้อมูลจำลอง)
+import numpy as np
+import pandas as pd
 from app.analysis.scenarios import analyze_scenarios
 
 router = APIRouter(tags=["line"])
@@ -50,7 +52,7 @@ async def line_webhook(
         logger.error("LINE webhook: invalid JSON body")
         return Response(status_code=400)
 
-    # verify signature
+    # verify signature (ถ้าตั้ง SECRET ไว้)
     if CHANNEL_SECRET and x_line_signature:
         ok = _verify_signature(CHANNEL_SECRET, raw, x_line_signature)
         if not ok:
@@ -63,24 +65,26 @@ async def line_webhook(
                 text = ev.get("message", {}).get("text", "").strip()
                 reply_token = ev["replyToken"]
 
-                reply_text = None
+                reply_text: str | List[str] | None = None
 
-                # --- Integration: analyze SYMBOL TF ---
+                # --- 1) วิเคราะห์จริง: "analyze SYMBOL TF"
                 if text.lower().startswith("analyze"):
                     parts = text.split()
                     if len(parts) >= 3:
                         symbol = parts[1].upper()
                         tf = parts[2].upper()
                         try:
-                            payload = analyze_wave(symbol, tf)
-                            reply_text = build_brief_message(payload)
+                            reply_text = [
+                                f"🔔 กำลังวิเคราะห์ {symbol} {tf} ...",
+                                build_brief_message(analyze_wave(symbol, tf)),
+                            ]
                         except Exception as e:
                             logger.exception("Analyze failed")
                             reply_text = f"❌ วิเคราะห์ไม่สำเร็จ: {e}"
                     else:
                         reply_text = "ใช้รูปแบบ: analyze SYMBOL TF\nเช่น: analyze BTCUSDT 1D"
 
-                # --- ราคา <symbol> ---
+                # --- 2) คำสั่งราคา: "ราคา BTC" / "price eth"
                 if not reply_text:
                     symbol = parse_price_command(text)
                     if symbol:
@@ -98,37 +102,43 @@ async def line_webhook(
                             price = None
 
                         if price is not None:
-                            reply_text = f"📈 {symbol}\nราคา: {float(price):,.2f}"
+                            reply_text = [
+                                f"🔔 รับคำสั่งราคา {symbol}",
+                                f"📈 {symbol}\nราคา: {float(price):,.2f}",
+                            ]
                         else:
                             reply_text = f"ขอโทษครับ ดึงราคา {symbol} ไม่ได้"
 
-                # --- MOCK วิเคราะห์ ---
+                # --- 3) วิเคราะห์ MOCK: "mock" หรือ "วิเคราะห์ mock"
                 if not reply_text and text.lower().strip() in {"mock", "วิเคราะห์ mock"}:
                     try:
                         np.random.seed(0)
                         close = np.cumsum(np.random.randn(150)) + 50000
-                        high  = close + np.abs(np.random.randn(150)) * 50
-                        low   = close - np.abs(np.random.randn(150)) * 50
+                        high = close + np.abs(np.random.randn(150)) * 50
+                        low = close - np.abs(np.random.randn(150)) * 50
                         open_ = close + np.random.randn(150)
-                        vol   = np.random.randint(100, 1000, size=150)
+                        vol = np.random.randint(100, 1000, size=150)
 
-                        df = pd.DataFrame({
-                            "open": open_, "high": high, "low": low, "close": close, "volume": vol
-                        })
+                        df = pd.DataFrame(
+                            {"open": open_, "high": high, "low": low, "close": close, "volume": vol}
+                        )
                         payload = analyze_scenarios(df, symbol="BTCUSDT", tf="1D")
                         pct = payload.get("percent", {})
-                        lv  = payload.get("levels", {})
-                        reply_text = (
-                            "🧪 MOCK ANALYSIS (BTCUSDT 1D)\n"
-                            f"↑ {pct.get('up',0)}%  ↓ {pct.get('down',0)}%  ↔ {pct.get('side',0)}%\n"
-                            f"RH: {lv.get('recent_high', None):,.2f} | RL: {lv.get('recent_low', None):,.2f}\n"
-                            f"EMA50: {lv.get('ema50', None):,.2f}"
-                        )
+                        lv = payload.get("levels", {})
+                        reply_text = [
+                            "🔔 กำลังประมวลผล (MOCK) ...",
+                            (
+                                "🧪 MOCK ANALYSIS (BTCUSDT 1D)\n"
+                                f"↑ {pct.get('up',0)}%  ↓ {pct.get('down',0)}%  ↔ {pct.get('side',0)}%\n"
+                                f"RH: {lv.get('recent_high', None):,.2f} | RL: {lv.get('recent_low', None):,.2f}\n"
+                                f"EMA50: {lv.get('ema50', None):,.2f}"
+                            ),
+                        ]
                     except Exception as e:
                         logger.exception("mock analysis failed")
                         reply_text = f"❌ วิเคราะห์ mock ไม่สำเร็จ: {e}"
 
-                # --- Otherwise: keyword reply
+                # --- 4) อย่างอื่น: keyword map ปกติ
                 if not reply_text:
                     reply_text = get_reply(text) or "ไม่เข้าใจคำสั่งครับ"
 
@@ -140,42 +150,25 @@ async def line_webhook(
     return Response(status_code=200)
 
 
-async def _reply_text(reply_token: str, text: str) -> None:
-    """เรียก LINE reply API (ข้ามเมื่อเป็น token ทดสอบ/ไม่มี ACCESS TOKEN)"""
-    # ข้ามเมื่อยังไม่ตั้ง token หรือเป็น token จำลอง
-    if not CHANNEL_ACCESS_TOKEN or reply_token in {"DUMMY", "TEST_REPLY_TOKEN"} or reply_token.startswith("DUMMY"):
+async def _reply_text(reply_token: str, text: str | List[str]) -> None:
+    """เรียก LINE reply API (รองรับหลายข้อความ และข้ามเมื่อเป็น token ทดสอบ/ไม่มี ACCESS TOKEN)"""
+    # ทดสอบในเครื่อง/Render: ใช้ token จำลองจะข้ามการยิงไป LINE
+    test_token = str(reply_token) in {"DUMMY", "TEST_REPLY_TOKEN"} or str(reply_token).startswith("DUMMY")
+    if (not CHANNEL_ACCESS_TOKEN) or test_token:
         logging.warning("Skip reply (test mode). token=%s text=%s", reply_token, text)
         return
 
+    messages = [{"type": "text", "text": t} for t in (text if isinstance(text, list) else [text])]
+
     url = "https://api.line.me/v2/bot/message/reply"
-    headers = {
-        "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}",
-        "Content-Type": "application/json",
-    }
-    body = {
-        "replyToken": reply_token,
-        "messages": [{"type": "text", "text": text}],
-    }
+    headers = {"Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}", "Content-Type": "application/json"}
+    body = {"replyToken": reply_token, "messages": messages}
+
     async with httpx.AsyncClient(timeout=10) as client:
         r = await client.post(url, headers=headers, json=body)
         if r.status_code == 400 and "Invalid reply token" in r.text:
-            logging.warning("Skip reply (invalid/expired token).")
+            logging.warning("Skip reply (invalid/expired token). token=%s", reply_token)
             return
-        if r.status_code != 200:
-            logging.warning("Reply API failed %s: %s", r.status_code, r.text)
-        else:
-            logging.info("Reply OK")
-
-    headers = {
-        "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}",
-        "Content-Type": "application/json",
-    }
-    body = {
-        "replyToken": reply_token,
-        "messages": [{"type": "text", "text": text}],
-    }
-    async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.post(url, headers=headers, json=body)
         if r.status_code != 200:
             logging.warning("Reply API failed %s: %s", r.status_code, r.text)
         else:
