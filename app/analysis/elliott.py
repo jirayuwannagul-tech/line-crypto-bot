@@ -62,30 +62,48 @@ def _build_swings(df: pd.DataFrame, left: int = 2, right: int = 2) -> pd.DataFra
     rows: List[Dict[str, object]] = []
     for i in range(len(df)):
         if is_sh.iat[i]:
-            rows.append({"idx": i, "timestamp": df.index[i] if "timestamp" not in df.columns else df["timestamp"].iat[i],
-                         "price": float(df["high"].iat[i]), "type": "H"})
+            rows.append({
+                "idx": i,
+                "timestamp": df.index[i] if "timestamp" not in df.columns else df["timestamp"].iat[i],
+                "price": float(df["high"].iat[i]),
+                "type": "H",
+            })
         if is_sl.iat[i]:
-            rows.append({"idx": i, "timestamp": df.index[i] if "timestamp" not in df.columns else df["timestamp"].iat[i],
-                         "price": float(df["low"].iat[i]), "type": "L"})
-    sw = pd.DataFrame(rows).sort_values("idx").reset_index(drop=True)
+            rows.append({
+                "idx": i,
+                "timestamp": df.index[i] if "timestamp" not in df.columns else df["timestamp"].iat[i],
+                "price": float(df["low"].iat[i]),
+                "type": "L",
+            })
+
+    # ✅ ต้องเช็คก่อนสร้าง DataFrame และก่อน sort เสมอ
+    if not rows:
+        return pd.DataFrame(columns=["idx", "timestamp", "price", "type"])
+
+    sw = pd.DataFrame.from_records(rows)
+
+    # กันกรณีผิดปกติที่ไม่มีคีย์ 'idx' ในแถวใดแถวหนึ่ง
+    if "idx" not in sw.columns:
+        return pd.DataFrame(columns=["idx", "timestamp", "price", "type"])
+
+    sw = sw.sort_values("idx").reset_index(drop=True)
 
     # enforce alternation by removing duplicates in succession (keep more extreme)
     cleaned: List[Dict[str, object]] = []
     for r in sw.to_dict("records"):
         if not cleaned:
-            cleaned.append(r); continue
+            cleaned.append(r)
+            continue
         if cleaned[-1]["type"] == r["type"]:
-            # replace with more extreme of the two
             if r["type"] == "H":
                 if r["price"] >= cleaned[-1]["price"]:
                     cleaned[-1] = r
-            else:  # L
+            else:  # "L"
                 if r["price"] <= cleaned[-1]["price"]:
                     cleaned[-1] = r
         else:
             cleaned.append(r)
     return pd.DataFrame(cleaned)
-
 
 def _leg_len(a: float, b: float) -> float:
     return abs(b - a)
