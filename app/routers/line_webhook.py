@@ -1,249 +1,253 @@
 # app/routers/line_webhook.py
+from __future__ import annotations
+
 import os
-import json
-import hmac
-import base64
-import hashlib
-import logging
-from typing import Any, Dict, List
+import re
+from typing import Optional
 
-import httpx
-from fastapi import APIRouter, Request, Header, Response
+from fastapi import APIRouter, Request, HTTPException
+from fastapi.responses import PlainTextResponse
 
-# 🔹 keyword reply + คำสั่งราคา
-from app.features.replies.keyword_reply import get_reply, parse_price_command
-# 🔹 วิเคราะห์จริง (service เดิมของโปรเจกต์)
-from app.services.wave_service import analyze_wave, build_brief_message
-# 🔹 ตัวดึงราคา (resolver)
-from app.utils.crypto_price import resolver
-# 🔹 MOCK วิเคราะห์ (ข้อมูลจำลอง)
-import numpy as np
-import pandas as pd
+from app.features.replies.keyword_reply import (
+    get_reply,
+    parse_price_command,
+    parse_analysis_mock,
+    parse_analyze_command,
+)
+
+# วิเคราะห์จริง
+from app.analysis.timeframes import get_data
 from app.analysis.scenarios import analyze_scenarios
 
-router = APIRouter(tags=["line"])
+# ตั้งแจ้งเตือนราคา (ใช้ร่วมกับ background loop ที่ start ใน app/main.py)
+from app.features.alerts.price_reach import add_watch, remove_watch
 
-# ENV config
-CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
+# LINE SDK v3
+from linebot.v3.messaging import (
+    Configuration,
+    ApiClient,
+    MessagingApi,
+    ReplyMessageRequest,
+    TextMessage as LineTextMessage,
+)
+from linebot.v3.webhooks import (
+    WebhookParser,
+    MessageEvent,
+    TextMessageContent,
+)
+from linebot.v3.exceptions import InvalidSignatureError
+
+router = APIRouter()
+
+# ====== ENV ======
 CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "")
+CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
 
-logger = logging.getLogger(__name__)
+# สร้าง parser และ config ของ LINE (ปล่อยว่างไว้ก่อนถ้าไม่มี env)
+_parser: Optional[WebhookParser] = WebhookParser(CHANNEL_SECRET) if CHANNEL_SECRET else None
+_config: Optional[Configuration] = Configuration(access_token=CHANNEL_ACCESS_TOKEN) if CHANNEL_ACCESS_TOKEN else None
+
+# ====== คำสั่งตั้ง/ยกเลิกแจ้งเตือนราคา ======
+# ตัวอย่าง:
+#   "ตั้งเข้า BTCUSDT 60000"         → tol=0
+#   "watch btc 60000 tol=50"         → tol=50
+#   "ยกเลิกเข้า BTCUSDT" / "unwatch btc"
+_WATCH_SET = re.compile(
+    r"^(?:ตั้งเข้า|watch)\s+([A-Za-z0-9:/._-]+)\s+([0-9]+(?:\.[0-9]+)?)(?:\s+tol=(\d+(?:\.\d+)?))?$",
+    re.IGNORECASE,
+)
+_WATCH_DEL = re.compile(
+    r"^(?:ยกเลิกเข้า|unwatch)\s+([A-Za-z0-9:/._-]+)$",
+    re.IGNORECASE,
+)
 
 
-def _verify_signature(channel_secret: str, body: bytes, signature: str) -> bool:
-    """ตรวจสอบ X-Line-Signature"""
-    try:
-        mac = hmac.new(channel_secret.encode("utf-8"), body, hashlib.sha256).digest()
-        expected = base64.b64encode(mac).decode("utf-8")
-        return hmac.compare_digest(expected, signature)
-    except Exception:
-        return False
-
-
+# NOTE: main.py include_router(..., prefix="/line")
+# ดังนั้น path ที่นี่ใช้ "/webhook" ให้ลงตัวเป็น /line/webhook
 @router.post("/webhook")
-async def line_webhook(
-    request: Request,
-    x_line_signature: str | None = Header(default=None, convert_underscores=False),
-) -> Response:
-    raw: bytes = await request.body()
+async def line_webhook(request: Request):
+    """
+    LINE webhook entrypoint:
+    - ตรวจลายเซ็นต์
+    - ไล่ events และตอบตาม logic
+    """
+    if _parser is None or _config is None:
+        raise HTTPException(status_code=500, detail="LINE credentials are not configured")
+
+    signature = request.headers.get("x-line-signature")
+    if not signature:
+        raise HTTPException(status_code=400, detail="Missing X-Line-Signature")
+
+    body_bytes = await request.body()
+    body_text = body_bytes.decode("utf-8")
+
     try:
-        payload: Dict[str, Any] = json.loads(raw.decode("utf-8"))
-    except Exception:
-        logger.error("LINE webhook: invalid JSON body")
-        return Response(status_code=400)
+        events = _parser.parse(body_text, signature)
+    except InvalidSignatureError:
+        raise HTTPException(status_code=401, detail="Invalid signature")
 
-    # verify signature (ถ้าตั้ง SECRET ไว้)
-    if CHANNEL_SECRET and x_line_signature:
-        ok = _verify_signature(CHANNEL_SECRET, raw, x_line_signature)
-        if not ok:
-            logger.warning("LINE webhook: signature verification FAILED")
-            return Response(status_code=403)
+    # ใช้ ApiClient ต่อครั้ง (short-lived)
+    with ApiClient(_config) as api_client:
+        messaging_api = MessagingApi(api_client)
 
-    for ev in payload.get("events", []):
-        try:
-            if ev.get("type") == "message" and "replyToken" in ev:
-                text = ev.get("message", {}).get("text", "").strip()
-                reply_token = ev["replyToken"]
+        for event in events:
+            if not isinstance(event, MessageEvent):
+                continue
+            if not isinstance(event.message, TextMessageContent):
+                continue
 
-                reply_text: str | List[str] | None = None
+            user_text = (event.message.text or "").strip()
+            user_id = getattr(event.source, "user_id", None)
 
-                # --- 1) วิเคราะห์จริง: "analyze SYMBOL TF"
-                if text.lower().startswith("analyze"):
-                    parts = text.split()
-                    if len(parts) >= 3:
-                        symbol = parts[1].upper()
-                        tf = parts[2].upper()
-                        try:
-                            reply_text = [
-                                f"🔔 กำลังวิเคราะห์ {symbol} {tf} ...",
-                                build_brief_message(analyze_wave(symbol, tf)),
-                            ]
-                        except Exception as e:
-                            logger.exception("Analyze failed")
-                            reply_text = f"❌ วิเคราะห์ไม่สำเร็จ: {e}"
-                    else:
-                        reply_text = "ใช้รูปแบบ: analyze SYMBOL TF\nเช่น: analyze BTCUSDT 1D"
+            # 0) ตั้ง/ยกเลิกแจ้งเตือนราคา (watch / unwatch)
+            m = _WATCH_SET.match(user_text)
+            if user_id and m:
+                sym = _norm_symbol(m.group(1))
+                entry = float(m.group(2))
+                tol = float(m.group(3)) if m.group(3) else 0.0
+                add_watch(user_id, sym, entry, tol)
+                _reply_text(
+                    messaging_api,
+                    event.reply_token,
+                    f"✅ ตั้งแจ้งเตือน {sym}\n• Entry: {fmt_num(entry)}\n• Tol: ±{fmt_num(tol)}",
+                )
+                continue
 
-                # --- 2) คำสั่งราคา: "ราคา BTC" / "price eth"
-                if not reply_text:
-                    symbol = parse_price_command(text)
-                    if symbol:
-                        try:
-                            price = None
-                            if hasattr(resolver, "price") and callable(getattr(resolver, "price")):
-                                maybe = resolver.price(symbol)
-                                price = (await maybe) if hasattr(maybe, "__await__") else maybe
-                            elif hasattr(resolver, "get") and callable(getattr(resolver, "get")):
-                                price = resolver.get(symbol)
-                            elif hasattr(resolver, "resolve") and callable(getattr(resolver, "resolve")):
-                                price = resolver.resolve(symbol)
-                        except Exception as e:
-                            logger.warning("resolver error: %s", e)
-                            price = None
+            m = _WATCH_DEL.match(user_text)
+            if user_id and m:
+                sym = _norm_symbol(m.group(1))
+                ok = remove_watch(user_id, sym)
+                _reply_text(
+                    messaging_api,
+                    event.reply_token,
+                    f"{'🗑️ ยกเลิก' if ok else 'ℹ️ ไม่พบ'} การแจ้งเตือน {sym}",
+                )
+                continue
 
-                        if price is not None:
-                            reply_text = [
-                                f"🔔 รับคำสั่งราคา {symbol}",
-                                f"📈 {symbol}\nราคา: {float(price):,.2f}",
-                            ]
-                        else:
-                            reply_text = f"ขอโทษครับ ดึงราคา {symbol} ไม่ได้"
+            # 1) แมพปิ้งข้อความทั่วไป
+            mapped = get_reply(user_text)
+            if mapped:
+                _reply_text(messaging_api, event.reply_token, mapped)
+                continue
 
-                # --- 3) วิเคราะห์ MOCK: "mock" หรือ "วิเคราะห์ mock"
-                if not reply_text and text.lower().strip() in {"mock", "วิเคราะห์ mock"}:
-                    try:
-                        np.random.seed(0)
-                        close = np.cumsum(np.random.randn(150)) + 50000
-                        high = close + np.abs(np.random.randn(150)) * 50
-                        low = close - np.abs(np.random.randn(150)) * 50
-                        open_ = close + np.random.randn(150)
-                        vol = np.random.randint(100, 1000, size=150)
+            # 2) คำสั่งราคา: "ราคา BTC" / "price eth"
+            symbol_price = parse_price_command(user_text)
+            if symbol_price:
+                price_text = await _handle_price(symbol_price)
+                _reply_text(messaging_api, event.reply_token, price_text)
+                continue
 
-                        df = pd.DataFrame(
-                            {"open": open_, "high": high, "low": low, "close": close, "volume": vol}
-                        )
-                        payload = analyze_scenarios(df, symbol="BTCUSDT", tf="1D")
-                        pct = payload.get("percent", {})
-                        lv = payload.get("levels", {})
-                        reply_text = [
-                            "🔔 กำลังประมวลผล (MOCK) ...",
-                            (
-                                "🧪 MOCK ANALYSIS (BTCUSDT 1D)\n"
-                                f"↑ {pct.get('up',0)}%  ↓ {pct.get('down',0)}%  ↔ {pct.get('side',0)}%\n"
-                                f"RH: {lv.get('recent_high', None):,.2f} | RL: {lv.get('recent_low', None):,.2f}\n"
-                                f"EMA50: {lv.get('ema50', None):,.2f}"
-                            ),
-                        ]
-                    except Exception as e:
-                        logger.exception("mock analysis failed")
-                        reply_text = f"❌ วิเคราะห์ mock ไม่สำเร็จ: {e}"
+            # 3) คำสั่ง mock: "mock" / "วิเคราะห์ mock"
+            if parse_analysis_mock(user_text):
+                mock_text = (
+                    "🧪 MOCK ANALYSIS\n"
+                    "UP 40% | DOWN 35% | SIDE 25%\n"
+                    "Key Levels:\n"
+                    " - SwingH: 60,500\n - SwingL: 58,200\n"
+                    " - EMA50/200: 59,800 / 57,900\n"
+                    " - Fibo 0.618 / 1.618: 59,200 / 61,400\n"
+                    "หมายเหตุ: ข้อมูลจำลองเพื่อทดสอบเท่านั้น"
+                )
+                _reply_text(messaging_api, event.reply_token, mock_text)
+                continue
 
-                # --- 4) อย่างอื่น: keyword map ปกติ
-                if not reply_text:
-                    reply_text = get_reply(text) or "ไม่เข้าใจคำสั่งครับ"
+            # 4) วิเคราะห์จริง: "วิเคราะห์ BTCUSDT 1H" / "analyze BTC 1D"
+            parsed = parse_analyze_command(user_text)
+            if parsed:
+                symbol, tf = parsed
+                try:
+                    df = get_data(symbol, tf)
+                    result = analyze_scenarios(df, symbol=symbol, tf=tf)
 
-                await _reply_text(reply_token, reply_text)
+                    pct = result.get("percent", {}) or {}
+                    lv = result.get("levels", {}) or {}
+                    fib = lv.get("fibo", {}) or {}
+                    el = lv.get("elliott_targets", {}) or {}
 
-        except Exception as e:
-            logger.warning("Reply failed (non-blocking): %s", e)
+                    reply = (
+                        f"🔎 วิเคราะห์ {symbol} | TF: {tf}\n"
+                        f"• แนวโน้ม: UP {pct.get('up',0)}% | DOWN {pct.get('down',0)}% | SIDE {pct.get('side',0)}%\n"
+                        f"• Key Levels:\n"
+                        f"   - Swing High: {fmt_num(lv.get('recent_high'))}\n"
+                        f"   - Swing Low : {fmt_num(lv.get('recent_low'))}\n"
+                        f"   - EMA50/200: {fmt_num(lv.get('ema50'))} / {fmt_num(lv.get('ema200'))}\n"
+                        f"   - Fibo 0.618 / 1.618: {fmt_num(fib.get('retr_0.618'))} / {fmt_num(fib.get('ext_1.618'))}\n"
+                        + (f"   - Elliott targets: {', '.join(f'{k}:{fmt_num(v)}' for k,v in el.items())}\n" if el else "")
+                    )
+                except FileNotFoundError:
+                    reply = "⚠️ ไม่พบไฟล์ข้อมูล: app/data/historical.xlsx"
+                except ValueError as e:
+                    reply = f"⚠️ ข้อมูลไม่พร้อม: {e}"
+                except Exception as e:
+                    reply = f"⚠️ เกิดข้อผิดพลาดระหว่างวิเคราะห์: {e}"
 
-    return Response(status_code=200)
+                _reply_text(messaging_api, event.reply_token, reply)
+                continue
 
-
-async def _reply_text(reply_token: str, text: str | List[str]) -> None:
-    """เรียก LINE reply API (รองรับหลายข้อความ และข้ามเมื่อเป็น token ทดสอบ/ไม่มี ACCESS TOKEN)"""
-    # ทดสอบในเครื่อง/Render: ใช้ token จำลองจะข้ามการยิงไป LINE
-    test_token = str(reply_token) in {"DUMMY", "TEST_REPLY_TOKEN"} or str(reply_token).startswith("DUMMY")
-    if (not CHANNEL_ACCESS_TOKEN) or test_token:
-        logging.warning("Skip reply (test mode). token=%s text=%s", reply_token, text)
-        return
-
-    messages = [{"type": "text", "text": t} for t in (text if isinstance(text, list) else [text])]
-
-    url = "https://api.line.me/v2/bot/message/reply"
-    headers = {"Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}", "Content-Type": "application/json"}
-    body = {"replyToken": reply_token, "messages": messages}
-
-    async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.post(url, headers=headers, json=body)
-        if r.status_code == 400 and "Invalid reply token" in r.text:
-            logging.warning("Skip reply (invalid/expired token). token=%s", reply_token)
-            return
-        if r.status_code != 200:
-            logging.warning("Reply API failed %s: %s", r.status_code, r.text)
-        else:
-            logging.info("Reply OK")
-
-
-# === DEBUG: PUSH TEST ENDPOINT ===
-@router.post("/push-test")
-async def push_test(payload: Dict[str, Any]) -> Response:
-    """
-    ยิงทดสอบ PUSH โดยไม่ต้องใช้ replyToken
-
-    JSON ตัวอย่าง:
-    { "to": "Uxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "text": "🔔 BTC แจ้งเตือนทดสอบ 50,000" }
-    หรือหลายบรรทัด:
-    { "to": "U...", "text": ["🔔 กำลังเตือน...", "📈 BTC 50,000"] }
-    """
-    to = str(payload.get("to", "")).strip()
-    text = payload.get("text", None)
-
-    # validate input
-    if not to or text is None:
-        return Response(
-            status_code=400,
-            content=json.dumps({"error": "missing 'to' or 'text'"}),
-            media_type="application/json",
-        )
-
-    # ข้ามการยิงจริงเมื่อยังไม่ตั้งค่า Token
-    if not CHANNEL_ACCESS_TOKEN:
-        logger.warning("CHANNEL_ACCESS_TOKEN not set; skip push.")
-        return Response(
-            status_code=200,
-            content=json.dumps({"ok": True, "skipped": "no CHANNEL_ACCESS_TOKEN"}),
-            media_type="application/json",
-        )
-
-    # สร้าง message list ให้รองรับทั้ง str และ list[str]
-    if isinstance(text, str):
-        msgs = [{"type": "text", "text": text}]
-    elif isinstance(text, list):
-        msgs = [{"type": "text", "text": str(t)} for t in text if t is not None]
-        if not msgs:
-            return Response(
-                status_code=400,
-                content=json.dumps({"error": "empty 'text' list"}),
-                media_type="application/json",
+            # 5) ไม่เข้าเงื่อนไขใด ๆ → ส่งตัวช่วยใช้งาน
+            helper = (
+                "สวัสดีครับ 👋 ตัวอย่างคำสั่ง:\n"
+                "• ราคา BTC\n"
+                "• วิเคราะห์ BTCUSDT 1H\n"
+                "• ตั้งเข้า BTCUSDT 60000 (หรือ watch btc 60000 tol=50)\n"
+                "• ยกเลิกเข้า BTCUSDT (หรือ unwatch btc)\n"
+                "• mock"
             )
-    else:
-        return Response(
-            status_code=400,
-            content=json.dumps({"error": "'text' must be string or list of strings"}),
-            media_type="application/json",
+            _reply_text(messaging_api, event.reply_token, helper)
+
+    return PlainTextResponse("OK")
+
+
+def _norm_symbol(s: str) -> str:
+    return s.upper().replace(":", "").replace("/", "")
+
+
+def _reply_text(api: MessagingApi, reply_token: str, text: str) -> None:
+    # กันข้อความยาวเกิน 5000
+    if text and len(text) > 4900:
+        text = text[:4900] + "\n[truncated]"
+    api.reply_message(
+        ReplyMessageRequest(
+            replyToken=reply_token,
+            messages=[LineTextMessage(text=text)],
         )
+    )
 
-    url = "https://api.line.me/v2/bot/message/push"
-    headers = {
-        "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}",
-        "Content-Type": "application/json",
-    }
-    body = {"to": to, "messages": msgs}
 
+async def _handle_price(symbol: str) -> str:
+    """
+    ดึงราคาแบบยืดหยุ่น:
+    - ถ้า project มี provider → เรียกใช้
+    - ถ้าล้มเหลว → แจ้งเตือนผู้ใช้
+    """
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.post(url, headers=headers, json=body)
-        if r.status_code != 200:
-            logger.warning("Push API failed %s: %s", r.status_code, r.text)
-            # ส่งสถานะ/ข้อความจาก LINE กลับไปให้ดีบักง่าย
-            return Response(status_code=r.status_code, content=r.text, media_type="application/json")
-        logger.info("Push OK")
-        return Response(status_code=200, content=json.dumps({"ok": True}), media_type="application/json")
-    except Exception as e:
-        logger.exception("push-test failed: %s", e)
-        return Response(
-            status_code=500,
-            content=json.dumps({"ok": False, "error": str(e)}),
-            media_type="application/json",
-        )
+        from app.adapters.price_provider import get_price  # type: ignore
+        px = await _maybe_async(get_price, symbol)
+        if px is not None:
+            return f"📈 {symbol}\nราคา: {fmt_num(px)}"
+    except Exception:
+        pass
+    return f"⚠️ ยังไม่พร้อมดึงราคา {symbol} (โปรดตรวจสอบ PRICE_PROVIDER หรือ provider function)."
+
+
+async def _maybe_async(func, *args, **kwargs):
+    """
+    รองรับทั้งฟังก์ชัน sync/async โดยไม่ต้องรู้ล่วงหน้า
+    """
+    import inspect
+    if inspect.iscoroutinefunction(func):
+        return await func(*args, **kwargs)
+    return func(*args, **kwargs)
+
+
+def fmt_num(val) -> str:
+    """ฟอร์แมตตัวเลขอ่านง่าย"""
+    try:
+        x = float(val)
+    except (TypeError, ValueError):
+        return "-"
+    if abs(x) >= 1000:
+        return f"{x:,.2f}"
+    if abs(x) >= 1:
+        return f"{x:.4f}"
+    return f"{x:.6f}"
