@@ -8,8 +8,9 @@ from __future__ import annotations
 # - รักษา backward compatibility กับโค้ดเดิม และรองรับ cfg ใน __init__
 # =============================================================================
 
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List
 import os
+import time
 import traceback
 import pandas as pd
 
@@ -34,9 +35,9 @@ DEFAULT_CFG: Dict[str, Any] = {
     "sma_fast": 10,
     "sma_slow": 30,
     "cooldown_sec": 0,
-    "risk_pct": 0.01,
-    "rr": 1.5,
-    "move_alerts": [],
+    "risk_pct": 0.01,   # 1% stop
+    "rr": 1.5,          # take-profit = risk_pct * rr
+    "move_alerts": [],  # เช่น [0.01, 0.02]
     # ช่องทางขยายในอนาคต...
 }
 
@@ -50,7 +51,7 @@ def _build_reasons_text(df: pd.DataFrame) -> str:
     macd_line, signal_line, hist = indicators.macd(df["close"])
     macd_val, signal_val, hist_val = macd_line.iloc[-1], signal_line.iloc[-1], hist.iloc[-1]
 
-    reasons = []
+    reasons: List[str] = []
     score_up, score_down = 0.0, 0.0
 
     # RSI
@@ -62,7 +63,6 @@ def _build_reasons_text(df: pd.DataFrame) -> str:
         score_down += 1
     else:
         reasons.append(f"RSI={rsi_val:.2f} → Neutral")
-        # ให้ bias ตาม EMA trend
         if ema20 > ema50:
             score_up += 0.5
         else:
@@ -84,7 +84,6 @@ def _build_reasons_text(df: pd.DataFrame) -> str:
         reasons.append("MACD < Signal → โมเมนตัมลบ")
         score_down += 1
 
-    # รวมคะแนน
     total = max(score_up + score_down, 1.0)
     up_pct = round(score_up / total * 100, 1)
     down_pct = round(score_down / total * 100, 1)
@@ -119,10 +118,123 @@ class SignalEngine:
         for k, v in base.items():
             setattr(self, k, v)
 
-        # state เริ่มต้น (หากโค้ดส่วนอื่นต้องการ)
-        self._last_open_ts = getattr(self, "_last_open_ts", None)
-        self._position = getattr(self, "_position", None)
+        # state ต่อสัญลักษณ์: ตำแหน่ง/anchor สำหรับ move alerts
+        # { symbol: {"side": "LONG", "entry": float, "tp": float, "sl": float, "anchor": float} }
+        self._pos: Dict[str, Dict[str, Any]] = {}
+        # เวลาล่าสุดที่เปิดสถานะ (ใช้ cooldown)
+        self._last_open_ts: Optional[float] = None
 
+    # ===== New: method ที่เทสเรียกใช้ =====
+    def process_ohlcv(self, symbol: str, df: pd.DataFrame, *, use_ai: bool = False) -> Dict[str, Any]:
+        """
+        ประมวลผลสัญญาณจาก DataFrame ที่ caller เตรียมให้
+        Expected keys ใน df: ['open','high','low','close'] (index เป็นเวลา/ลำดับก็ได้)
+        พฤติกรรมให้ตรงตามเทส:
+          - จำนวนน้อยกว่า min_candles → HOLD
+          - ถ้าไม่มีสถานะ และ SMA_fast > SMA_slow + แท่งสุดท้ายเขียว + ไม่ติด cooldown → OPEN LONG
+          - ถ้ามีสถานะ LONG:
+              - ปิดเมื่อแตะ TP (ไม่ flip, action=CLOSE)
+              - ถ้าราคาไม่ถึง TP/SL → HOLD
+              - ยิง move alerts เมื่อราคาขยับเกิน threshold จาก anchor และอัปเดต anchor
+        """
+        out = {"symbol": symbol, "action": "HOLD", "side": None, "confidence": 0.5, "alerts": []}
+
+        # 0) validate length
+        if len(df) < int(self.cfg["min_candles"]):
+            out["reason"] = "insufficient_candles"
+            return out
+
+        close = df["close"].iloc[-1]
+        open_ = df["open"].iloc[-1]
+
+        # 1) compute SMA
+        fast_n = int(self.cfg["sma_fast"])
+        slow_n = int(self.cfg["sma_slow"])
+        sma_fast = df["close"].rolling(window=fast_n).mean().iloc[-1]
+        sma_slow = df["close"].rolling(window=slow_n).mean().iloc[-1]
+
+        # 2) basic confidence; AI on → เพิ่มความเชื่อมั่นเล็กน้อย (ไม่จำเป็นต่อกติกาเปิดสถานะ)
+        conf = 0.5
+        if sma_fast > sma_slow:
+            conf += 0.2
+        if close > open_:
+            conf += 0.2
+        if use_ai:
+            conf += 0.1
+        out["confidence"] = max(0.0, min(1.0, conf))
+
+        # 3) มีสถานะอยู่หรือไม่
+        pos = self._pos.get(symbol)
+
+        # 3.1 ถ้ามีสถานะ LONG → ตรวจ TP/SL + move alerts
+        if pos and pos.get("side") == "LONG":
+            entry = pos["entry"]
+            tp = pos["tp"]
+            sl = pos["sl"]
+
+            # move alerts: ยิงเมื่อขยับจาก anchor เกิน threshold
+            alerts = []
+            anchor = pos.get("anchor", entry)
+            for th in sorted(self.cfg.get("move_alerts", [])):
+                if th <= 0:
+                    continue
+                # ขึ้นไปจาก anchor
+                if close >= anchor * (1 + th):
+                    alerts.append(f"up_{round(th*100, 1)}%")
+                    # อัปเดต anchor ขยับตามสเต็ปเพื่อรองรับทบหลายขั้นได้
+                    anchor = anchor * (1 + th)
+            if alerts:
+                out["alerts"] = alerts
+                pos["anchor"] = anchor  # update
+
+            # ตรวจ TP/SL
+            if close >= tp:
+                pnl = (close - entry) / entry
+                self._pos.pop(symbol, None)
+                out.update({"action": "CLOSE", "side": "LONG", "reason": "take_profit", "pnl": pnl})
+                return out
+            if close <= sl:
+                pnl = (close - entry) / entry
+                self._pos.pop(symbol, None)
+                out.update({"action": "CLOSE", "side": "LONG", "reason": "stop_loss", "pnl": pnl})
+                return out
+
+            # ถ้าไม่ถึง TP/SL → ถือ
+            out.update({"action": "HOLD", "side": "LONG", "reason": "in_position"})
+            return out
+
+        # 3.2 ถ้ายังไม่มีสถานะ → พิจารณาเปิด LONG
+        # ติด cooldown ไหม
+        now = time.time()
+        if self.cfg.get("cooldown_sec", 0) and self._last_open_ts is not None:
+            if now - self._last_open_ts < float(self.cfg["cooldown_sec"]):
+                out["reason"] = "cooldown"
+                return out
+
+        # เงื่อนไขเปิด: fast > slow และแท่งเขียว
+        if sma_fast > sma_slow and close > open_:
+            entry = float(close)
+            risk_pct = float(self.cfg["risk_pct"])
+            rr = float(self.cfg["rr"])
+            sl = entry * (1.0 - risk_pct)
+            tp = entry * (1.0 + risk_pct * rr)
+
+            self._pos[symbol] = {
+                "side": "LONG",
+                "entry": entry,
+                "tp": tp,
+                "sl": sl,
+                "anchor": entry,  # สำหรับ move alerts
+            }
+            self._last_open_ts = now
+            out.update({"action": "OPEN", "side": "LONG", "entry": entry, "tp": tp, "sl": sl})
+            return out
+
+        # ไม่เข้าเงื่อนไข → HOLD
+        out["reason"] = "no_setup"
+        return out
+
+    # ===== เดิม: วิเคราะห์ด้วย data loader ภายใน และ compose ข้อความสำหรับ LINE =====
     def analyze_symbol(
         self,
         symbol: str,
