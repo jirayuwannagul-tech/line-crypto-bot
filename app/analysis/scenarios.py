@@ -1,4 +1,3 @@
-# app/analysis/scenarios.py
 # =============================================================================
 # LAYER A) OVERVIEW
 # -----------------------------------------------------------------------------
@@ -17,7 +16,6 @@
 #     "pivot_left": 2, "pivot_right": 2,  # ส่งต่อให้ analyze_elliott
 #   }
 # =============================================================================
-
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
@@ -165,7 +163,7 @@ def _pct(x: float) -> int:
     return int(round(100 * x))
 
 # =============================================================================
-# LAYER D) CORE: ANALYZE SCENARIOS (PROFILE‑AWARE)
+# LAYER D) CORE: ANALYZE SCENARIOS (PROFILE-AWARE)
 # -----------------------------------------------------------------------------
 def analyze_scenarios(
     df: Optional[pd.DataFrame],
@@ -182,7 +180,7 @@ def analyze_scenarios(
     """
     cfg = cfg or {}
 
-    # --- Patch 2: guard against df=None (fail fast with clear message) ---
+    # --- Guard --- df ต้องไม่ None
     if df is None:
         raise ValueError(
             "analyze_scenarios: df is None (no data). "
@@ -236,7 +234,7 @@ def analyze_scenarios(
             min_points=2
         )
 
-    # 4) Voting logic → logits (profile‑weighted)
+    # 4) Voting logic → logits (profile-weighted)
     up_logit = 0.0
     down_logit = 0.0
     side_logit = 0.0

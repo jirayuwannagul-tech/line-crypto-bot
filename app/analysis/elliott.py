@@ -3,7 +3,7 @@
 # Basic Elliott Wave Analyzer (rule-based, heuristic)
 # Returns a compact payload for downstream use:
 #   {
-#     "pattern": "IMPULSE|DIAGONAL|ZIGZAG|FLAT|TRIANGLE|UNKNOWN",
+#     "pattern": "IMPULSE|DIAGONAL|ZIGZAG|FLAT|TRIANGLE|DOUBLE_THREE|TRIPLE_THREE|UNKNOWN",
 #     "completed": bool,
 #     "current": {"stage": "...", "direction": "up|down|side"},
 #     "next": {"stage": "...", "direction": "up|down|side"},
@@ -15,6 +15,7 @@
 # - Uses fractal pivots to extract swing points, then tries to fit patterns.
 # - Enforces Elliott hard rules for Impulse (with fallback to Diagonal when overlap).
 # - Corrective patterns handled: Zigzag (5-3-5), Flat (3-3-5), Triangle (3-3-3-3-3).
+# - Composite corrections (placeholders): Double Three (W-X-Y), Triple Three (W-X-Y-X-Z).
 # - Targets are heuristic Fibo projections suitable as starting points for orchestration.
 # - This is intentionally conservative to avoid false “Impulse” labels.
 # -----------------------------------------------------------------------------
@@ -28,7 +29,16 @@ import numpy as np
 import pandas as pd
 
 Direction = Literal["up", "down", "side"]
-Pattern = Literal["IMPULSE", "DIAGONAL", "ZIGZAG", "FLAT", "TRIANGLE", "UNKNOWN"]
+Pattern = Literal[
+    "IMPULSE",
+    "DIAGONAL",
+    "ZIGZAG",
+    "FLAT",
+    "TRIANGLE",
+    "DOUBLE_THREE",
+    "TRIPLE_THREE",
+    "UNKNOWN",
+]
 
 __all__ = ["analyze_elliott", "Pattern", "Direction"]
 
@@ -104,6 +114,7 @@ def _build_swings(df: pd.DataFrame, left: int = 2, right: int = 2) -> pd.DataFra
         else:
             cleaned.append(r)
     return pd.DataFrame(cleaned)
+
 
 def _leg_len(a: float, b: float) -> float:
     return abs(b - a)
@@ -193,10 +204,8 @@ def _detect_impulse(sw: pd.DataFrame, allow_diagonal: bool = True) -> Optional[D
 
         # ---- Rule 2: Wave3 not the shortest among (1,3,5)
         motive_lengths = [w1, w3, w5]
-        if w3 == min(motive_lengths) - 0:  # allow equal only if not strictly shortest
-            # strictly shortest -> invalid
-            if w3 < min([w for w in motive_lengths if w != w3] + [w3 + 1e9]):
-                continue
+        if w3 < min(w1, w5):
+            continue
 
         # ---- Rule 3: Wave4 overlap Wave1 territory?
         overlap = False
@@ -213,14 +222,11 @@ def _detect_impulse(sw: pd.DataFrame, allow_diagonal: bool = True) -> Optional[D
             continue
 
         # ---- Completed?
-        # If the last swing (wave5 extreme) is very recent (very last swing) and we don't have a counter swing yet,
-        # mark as not yet confirmed complete. We use a small bar-gap heuristic (idx distance to dataset end).
         completed = True  # conservative: consider wave5 printed -> completed
         current_stage = "impulse_5_complete"
         next_stage = "corrective_A" if direction == "up" else "corrective_A_down"
 
-        # ---- Targets for the NEXT move (post-impulse correction) using fib retrace of wave 5→?
-        # Standard: retrace 38.2%–61.8% of wave (0→5) measured from p5.
+        # ---- Targets for the NEXT move (post-impulse correction) using fib retrace of wave (0->5)
         total_len = abs(p5 - p0)
         if direction == "up":
             t_382 = p5 - total_len * 0.382
@@ -316,9 +322,9 @@ def _detect_zigzag(sw: pd.DataFrame) -> Optional[DetectResult]:
         next_stage = "resume_trend_up" if direction == "down" else "resume_trend_down"
 
         # Targets post zigzag: look for retrace of whole A→C
+        total = abs(p3 - p0)
         if direction == "up":
             # Zigzag up (rare as correction), next often down
-            total = abs(p3 - p0)
             t382 = p3 - total * 0.382
             t500 = p3 - total * 0.5
             targets = {
@@ -327,7 +333,6 @@ def _detect_zigzag(sw: pd.DataFrame) -> Optional[DetectResult]:
             }
         else:
             # Zigzag down (typical correction), next often up
-            total = abs(p3 - p0)
             t382 = p3 + total * 0.382
             t500 = p3 + total * 0.5
             targets = {
@@ -412,8 +417,14 @@ def _detect_flat(sw: pd.DataFrame) -> Optional[DetectResult]:
             next_stage=next_stage,
             direction=direction,
             targets=targets,
-            meta={"window_indices": idxs, "window_types": types, "window_prices": prices, "B_retrace": rB, "C_A_ratio": ratio_CA,
-                  "variant": "Expanded" if is_expanded else "Regular"},
+            meta={
+                "window_indices": idxs,
+                "window_types": types,
+                "window_prices": prices,
+                "B_retrace": rB,
+                "C_A_ratio": ratio_CA,
+                "variant": "Expanded" if is_expanded else "Regular",
+            },
         )
     return None
 
@@ -437,15 +448,15 @@ def _detect_triangle(sw: pd.DataFrame) -> Optional[DetectResult]:
             continue
 
         highs = [p for t, p in zip(types, prices) if t == "H"]
-        lows = [p for t, p in zip(types, prices) if t == "L"]
+        lows  = [p for t, p in zip(types, prices) if t == "L"]
 
         if len(highs) < 2 or len(lows) < 2:
             continue
 
         contracting = (all(x > y for x, y in zip(highs, highs[1:])) and
-                       all(x < y for x, y in zip(lows, lows[1:])))
-        expanding = (all(x < y for x, y in zip(highs, highs[1:])) and
-                     all(x > y for x, y in zip(lows, lows[1:])))
+                       all(x < y for x, y in zip(lows,  lows[1:])))
+        expanding   = (all(x < y for x, y in zip(highs, highs[1:])) and
+                       all(x > y for x, y in zip(lows,  lows[1:])))
 
         if not (contracting or expanding):
             continue
@@ -481,6 +492,57 @@ def _detect_triangle(sw: pd.DataFrame) -> Optional[DetectResult]:
 
 
 # =============================================================================
+# Extra detectors
+# =============================================================================
+
+def _detect_diagonal(sw: pd.DataFrame) -> Optional[DetectResult]:
+    """Heuristic diagonal detector (very lightweight; fallback when impulse fails)."""
+    if len(sw) < 6:
+        return None
+    win = sw.iloc[-6:]
+    types = win["type"].tolist()
+    prices = win["price"].tolist()
+    idxs = win["idx"].tolist()
+    if types not in (["L","H","L","H","L","H"], ["H","L","H","L","H","L"]):
+        return None
+    return DetectResult(
+        pattern="DIAGONAL",
+        completed=True,
+        current_stage="wave5_diag",
+        next_stage="corrective_A",
+        direction="up" if types[-1] == "H" else "down",
+        targets={},
+        meta={"window_indices": idxs, "window_types": types, "window_prices": prices},
+    )
+
+
+def _detect_double_three(sw: pd.DataFrame) -> Optional[DetectResult]:
+    """Simple placeholder for W-X-Y correction (Double Three)."""
+    return DetectResult(
+        pattern="DOUBLE_THREE",
+        completed=False,
+        current_stage="WXY_partial",
+        next_stage="continue",
+        direction="side",
+        targets={},
+        meta={},
+    )
+
+
+def _detect_triple_three(sw: pd.DataFrame) -> Optional[DetectResult]:
+    """Simple placeholder for W-X-Y-X-Z correction (Triple Three)."""
+    return DetectResult(
+        pattern="TRIPLE_THREE",
+        completed=False,
+        current_stage="WXYXZ_partial",
+        next_stage="continue",
+        direction="side",
+        targets={},
+        meta={},
+    )
+
+
+# =============================================================================
 # Public API
 # =============================================================================
 
@@ -511,7 +573,7 @@ def analyze_elliott(
     if len(sw) > max_swings:
         sw = sw.tail(max_swings).reset_index(drop=True)
 
-    # Try patterns (priority: Impulse/Diagonal -> Zigzag -> Flat -> Triangle)
+    # Try patterns (priority: Impulse/Diagonal -> Zigzag -> Flat -> Triangle -> Extras)
     det = _detect_impulse(sw, allow_diagonal=allow_diagonal)
     if det is not None:
         return _pack(det, sw)
@@ -525,6 +587,20 @@ def analyze_elliott(
         return _pack(det, sw)
 
     det = _detect_triangle(sw)
+    if det is not None:
+        return _pack(det, sw)
+
+    # Fallback diagonals (very lenient) if strict impulse didn’t claim it
+    det = _detect_diagonal(sw)
+    if det is not None:
+        return _pack(det, sw)
+
+    # Placeholders for composite corrections (optional classification hints)
+    det = _detect_double_three(sw)
+    if det is not None:
+        return _pack(det, sw)
+
+    det = _detect_triple_three(sw)
     if det is not None:
         return _pack(det, sw)
 
