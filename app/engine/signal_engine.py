@@ -42,7 +42,7 @@ def _build_reasons_text(df: pd.DataFrame) -> str:
     reasons = []
     score_up, score_down = 0, 0
 
-    # RSI
+       # RSI
     if rsi_val < 45:
         reasons.append(f"RSI={rsi_val:.2f} → ใกล้ Oversold")
         score_up += 1
@@ -51,14 +51,19 @@ def _build_reasons_text(df: pd.DataFrame) -> str:
         score_down += 1
     else:
         reasons.append(f"RSI={rsi_val:.2f} → Neutral")
+        # ให้ bias ตาม EMA trend
+        if ema20 > ema50:
+            score_up += 0.5
+        else:
+            score_down += 0.5
 
-    # EMA
+    # EMA (น้ำหนักมากกว่า RSI)
     if ema20 > ema50:
         reasons.append("EMA20 > EMA50 → แนวโน้มขาขึ้นสั้น")
-        score_up += 1
+        score_up += 1.5
     else:
         reasons.append("EMA20 < EMA50 → แนวโน้มอ่อนตัว")
-        score_down += 1
+        score_down += 1.5
 
     # MACD
     if macd_val > signal_val:
@@ -67,6 +72,7 @@ def _build_reasons_text(df: pd.DataFrame) -> str:
     else:
         reasons.append("MACD < Signal → โมเมนตัมลบ")
         score_down += 1
+
 
     # รวมคะแนน
     total = max(score_up + score_down, 1)
