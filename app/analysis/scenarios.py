@@ -7,7 +7,7 @@
 # - เพิ่ม "โปรไฟล์" (baseline / cholak / chinchot) เพื่อปรับน้ำหนักตัดสินใจ
 # - รองรับ Fibo Cluster เป็นโซนยืนยัน/จังหวะเข้า โดยไม่ทำให้ API เดิมพัง
 #
-# Public API (คงเดิม):
+# Public API:
 #   analyze_scenarios(df: pd.DataFrame, symbol="BTCUSDT", tf="1D", cfg=None) -> Dict
 #
 # cfg ตัวอย่าง:
@@ -20,7 +20,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 import os
 import math
@@ -35,10 +34,6 @@ from . import elliott as ew  # analyze_elliott
 # =============================================================================
 # LAYER B) PROFILE LOADING (SAFE)
 # -----------------------------------------------------------------------------
-# อธิบาย:
-# - พยายามโหลด app/config/strategy_profiles.yaml ถ้าไม่มีให้ใช้ค่า default
-# - มีฟังก์ชัน _get_profile(tf, name) คืน dict พร้อม overrides ของ timeframe
-# =============================================================================
 _DEFAULTS = {
     "min_prob": 50,
     "min_rr": 1.30,
@@ -60,7 +55,7 @@ _DEFAULTS = {
         "elliott_weight": 1.10,
         "dow_weight": 0.90,
         "indicators_weight": 0.70,
-        "side_range_threshold": 0.035,
+        "side_range_threshold": 0.035,  # 20-bar range / price < threshold → SIDE bias
     },
     "momentum_triggers": {
         "rsi_bull_trigger": 57,
@@ -71,7 +66,7 @@ _DEFAULTS = {
 
 def _safe_load_yaml(path: str) -> Optional[Dict]:
     try:
-        import yaml  # requirements.txt ควรมี pyyaml
+        import yaml
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
                 return yaml.safe_load(f) or {}
@@ -80,7 +75,7 @@ def _safe_load_yaml(path: str) -> Optional[Dict]:
     return None
 
 def _merge(a: Dict, b: Dict) -> Dict:
-    """merge แบบลึก (dict เฉพาะที่ซ้อนกัน) — b ทับ a"""
+    """merge แบบลึก — b ทับ a"""
     out = dict(a)
     for k, v in (b or {}).items():
         if isinstance(v, dict) and isinstance(out.get(k), dict):
@@ -102,7 +97,6 @@ def _get_profile(tf: str, name: str = "baseline") -> Dict:
     ov = (prof.get("overrides", {}) or {}).get("by_timeframe", {}) if isinstance(prof, dict) else {}
     if tf in ov:
         merged = _merge(merged, ov[tf])
-
     return merged
 
 # =============================================================================
@@ -174,7 +168,7 @@ def _pct(x: float) -> int:
 # LAYER D) CORE: ANALYZE SCENARIOS (PROFILE‑AWARE)
 # -----------------------------------------------------------------------------
 def analyze_scenarios(
-    df: pd.DataFrame,
+    df: Optional[pd.DataFrame],
     *,
     symbol: str = "BTCUSDT",
     tf: str = "1D",
@@ -188,6 +182,13 @@ def analyze_scenarios(
     """
     cfg = cfg or {}
 
+    # --- Patch 2: guard against df=None (fail fast with clear message) ---
+    if df is None:
+        raise ValueError(
+            "analyze_scenarios: df is None (no data). "
+            "Pass a DataFrame or let the caller load it first."
+        )
+
     if len(df) < 50:
         return {
             "percent": {"up": 33, "down": 33, "side": 34},
@@ -196,7 +197,7 @@ def analyze_scenarios(
             "meta": {"symbol": symbol, "tf": tf},
         }
 
-    # 0) โหลดโปรไฟล์ (fallback ปลอดภัย)
+    # 0) Profile
     profile_name = str(cfg.get("profile", "baseline"))
     prof = _get_profile(tf, profile_name)
 
@@ -212,8 +213,8 @@ def analyze_scenarios(
 
     # 3) Swings & Fibo + Cluster
     sw_meta = _recent_swings(df_ind, k=7)
-    fibo_levels = {}
-    cluster_info = None
+    fibo_levels: Dict[str, Optional[float]] = {}
+    cluster_info: Optional[Dict] = None
     if "leg_A" in sw_meta and "leg_B" in sw_meta and sw_meta.get("leg_dir") in ("up", "down"):
         A = sw_meta["leg_A"]
         B = sw_meta["leg_B"]
@@ -261,7 +262,7 @@ def analyze_scenarios(
         side_logit += 0.7 * dw
         notes.append("Dow primary SIDE.")
 
-    # Elliott pattern bias (ให้น้ำหนักนำหน้า)
+    # Elliott pattern bias
     patt = ell.get("pattern", "UNKNOWN")
     edir = (ell.get("current", {}) or {}).get("direction", "side")
     if patt in ("IMPULSE", "DIAGONAL"):
@@ -364,7 +365,7 @@ def analyze_scenarios(
             "swings": {k: v for k, v in sw_meta.items() if k in ("last_swing_type","last_swing_price","prev_swing_type","prev_swing_price","leg_dir")},
         },
     }
-    # enforce sum=100 (ปรับ SIDE ให้รวมได้ 100)
+    # enforce sum = 100 (ปรับ SIDE ให้รวมได้พอดี)
     total = payload["percent"]["up"] + payload["percent"]["down"] + payload["percent"]["side"]
     if total != 100:
         diff = 100 - total
