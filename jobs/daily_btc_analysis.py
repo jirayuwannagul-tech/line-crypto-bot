@@ -11,18 +11,21 @@ Daily BTC Analysis Job
 """
 
 from __future__ import annotations
+
 import os
 import sys
-from datetime import datetime, timezone
 import traceback
+from datetime import datetime, timezone
 
 import pandas as pd
+from pandas.api.types import is_datetime64tz_dtype
 
 # === โปรเจกต์โมดูล ===
 from app.analysis.timeframes import get_data
 from app.services.wave_service import analyze_wave, build_brief_message
 from app.analysis.entry_exit import suggest_trade, format_trade_text
 from app.adapters import delivery_line as line
+
 
 HIST_PATH = "app/data/historical.xlsx"
 SYMBOL = "BTCUSDT"
@@ -33,19 +36,38 @@ PROFILE = os.getenv("STRATEGY_PROFILE", "baseline")
 LINE_TO = os.getenv("LINE_DEFAULT_TO", "").strip()
 
 
-def _now_utc():
+# ---------- Helpers ----------
+def _now_utc_str() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
-def save_df_to_excel(df: pd.DataFrame, path: str, sheet: str):
+def _excel_sanitize_datetimes(df: pd.DataFrame) -> pd.DataFrame:
     """
-    บันทึกแทนทั้งชีท (ปลอดภัยสุด ลดปัญหา schema mismatch)
-    - index เป็น datetime/str ได้ทั้งคู่
-    - คาดว่า df เป็น OHLCV + อินดิเคเตอร์ได้ (จะเก็บเท่าที่มี)
+    ทำให้ทุก datetime เป็น tz-naive (Excel ไม่รองรับ tz-aware)
+    - แปลง index ถ้าเป็น DatetimeIndex ที่มี tz → แปลงเป็น UTC แล้วตัด tz ออก
+    - แปลงคอลัมน์ที่เป็น datetime64[ns, tz] → UTC → tz-naive
     """
+    out = df.copy()
+    if isinstance(out.index, pd.DatetimeIndex) and out.index.tz is not None:
+        out.index = out.index.tz_convert("UTC").tz_localize(None)
+    for col in out.columns:
+        s = out[col]
+        if is_datetime64tz_dtype(s):
+            out[col] = s.dt.tz_convert("UTC").dt.tz_localize(None)
+    return out
+
+
+def save_df_to_excel(df: pd.DataFrame, path: str, sheet: str) -> None:
+    """
+    เขียนทั้งชีท (replace) เพื่อกัน schema เพี้ยน + ทำ tz-naive เสมอ
+    """
+    df = _excel_sanitize_datetimes(df)
+
+    # สร้างโฟลเดอร์ปลายทางถ้ายังไม่มี
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
     mode = "a" if os.path.exists(path) else "w"
     if mode == "a":
-        # ลบชีทเดิมก่อนแล้วเขียนใหม่ เพื่อกันคอลัมน์เพี้ยน
         with pd.ExcelWriter(path, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
             df.to_excel(writer, sheet_name=sheet, index=True)
     else:
@@ -53,7 +75,7 @@ def save_df_to_excel(df: pd.DataFrame, path: str, sheet: str):
             df.to_excel(writer, sheet_name=sheet, index=True)
 
 
-def send_line(text: str):
+def send_line(text: str) -> None:
     """
     ส่ง LINE แบบยืดหยุ่น:
     - ถ้ามี LINE_DEFAULT_TO → push ไปยัง id นั้น
@@ -61,23 +83,24 @@ def send_line(text: str):
     """
     try:
         if LINE_TO:
-            line.push_message(LINE_TO, text)   # โปรเจกต์นี้ส่วนใหญ่รองรับ (to, text)
+            line.push_message(LINE_TO, text)
         else:
             line.broadcast(text)
     except TypeError:
-        # เผื่อบางเวอร์ชันของ delivery_line ใช้ signature ที่ต่างออกไป
+        # เผื่อ signature แตกต่างในบางเวอร์ชัน
         try:
             line.push_message(text)
         except Exception:
             line.broadcast(text)
 
 
-def main():
-    print(f"[{_now_utc()}] Start daily BTC analysis job")
+# ---------- Main ----------
+def main() -> None:
+    print(f"[{_now_utc_str()}] Start daily BTC analysis job")
 
     # 1) โหลดราคาสด (ไม่ส่ง xlsx_path) → 1D ล่าสุดเต็มช่วง
     print("• Fetching fresh OHLCV from provider (1D)…")
-    df_1d = get_data(SYMBOL, TF)   # ในโปรเจกต์คุณรองรับ “โหลดราคาสดจาก provider (ไม่ส่ง xlsx_path)”
+    df_1d = get_data(SYMBOL, TF)
     if df_1d is None or len(df_1d) == 0:
         raise RuntimeError("get_data() returned empty df")
 
@@ -86,15 +109,19 @@ def main():
     print(f"• Writing latest data to {HIST_PATH} (sheet: {sheet_name}) … rows={len(df_1d)}")
     save_df_to_excel(df_1d, HIST_PATH, sheet_name)
 
-    # 3) วิเคราะห์ด้วย engine / services ที่มีอยู่
-    #    - ใช้ xlsx_path เพื่อให้ pipeline อื่น ๆ อ้างอิงไฟล์เดียวกัน
+    # 3) วิเคราะห์จากไฟล์เดียวกัน (ให้ pipeline อื่นอ้างอิงสอดคล้อง)
     print("• Analyzing wave/summary from historical.xlsx …")
     payload = analyze_wave(SYMBOL, TF, xlsx_path=HIST_PATH)
     brief = build_brief_message(payload)
 
-    # 4) สร้างสัญญาณเข้า/ออกตามโปรไฟล์ (ใช้ df จาก payload ถ้ามี ไม่งั้นให้ suggest_trade โหลดเอง)
+    # 4) สร้างสัญญาณเข้า/ออกตามโปรไฟล์ (ใช้ df จาก payload ถ้ามี)
     print("• Building trade suggestion …")
-    df_for_trade = payload.get("debug", {}).get("df")
+    df_for_trade = {}
+    try:
+        df_for_trade = payload.get("debug", {}).get("df")
+    except Exception:
+        df_for_trade = None
+
     suggestion = suggest_trade(
         df_for_trade,
         symbol=SYMBOL,
@@ -103,16 +130,15 @@ def main():
     )
     trade_text = format_trade_text(suggestion)
 
-    # 5) เกณฑ์ “มีสัญญาณ” → ส่ง LINE
+    # 5) ถ้ามีสัญญาณ → ส่ง LINE
     has_entry = False
     try:
-        # รองรับทั้ง dict และ object-like
-        entry = (suggestion or {}).get("entry") if isinstance(suggestion, dict) else getattr(suggestion, "entry", None)
+        entry = (suggestion or {}).get("entry") if isinstance(suggestion, dict) \
+            else getattr(suggestion, "entry", None)
         has_entry = bool(entry)
     except Exception:
         has_entry = False
 
-    # สรุปข้อความเดียวสำหรับแปะ LINE
     header = f"🗓 {datetime.now().strftime('%Y-%m-%d %H:%M')} (Asia/Bangkok)\n"
     body = (
         f"📈 Daily BTC Analysis (from provider → saved to Excel)\n"
@@ -121,14 +147,13 @@ def main():
     )
     msg = header + body
 
-    # ส่งแจ้งเตือนเมื่อ “มีสัญญาณใหม่” เท่านั้น
     if has_entry:
         print("• Signal detected → sending LINE …")
         send_line(msg)
     else:
         print("• No tradable signal → skip LINE. (You still can check logs)")
 
-    print(f"[{_now_utc()}] Job done.")
+    print(f"[{_now_utc_str()}] Job done.")
 
 
 if __name__ == "__main__":
@@ -137,9 +162,8 @@ if __name__ == "__main__":
     except Exception as e:
         err = f"❌ Daily BTC job failed: {e}\n{traceback.format_exc()}"
         print(err, file=sys.stderr)
-        # แจ้งเตือนความผิดพลาดผ่าน LINE (ไม่บังคับ)
         try:
-            send_line(err[:1800])  # กันข้อความยาวเกิน
+            send_line(err[:1800])
         except Exception:
             pass
         sys.exit(1)
