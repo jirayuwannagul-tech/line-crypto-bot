@@ -49,7 +49,7 @@ def _get_bool_env(name: str, default: bool = False) -> bool:
 def main() -> int:
     # --- config จาก ENV (มีค่า default ที่ปลอดภัย)
     symbol  = _env("JOB_SYMBOL", "BTCUSDT")
-    tf      = _env("JOB_TF", "1H")
+    tf      = _env("JOB_TF", "1D")
     profile = _env("STRATEGY_PROFILE", "baseline")
     xlsx    = _env("HISTORICAL_XLSX_PATH", None)
     do_broadcast = _get_bool_env("JOB_BROADCAST", False)
