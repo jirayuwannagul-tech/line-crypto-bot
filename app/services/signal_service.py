@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional, List
 
 import logging
 
-from app.engine.signal_engine import build_signal_payload, build_line_text
+from app.engine.signal_engine import build_signal_payload
 
 logger = logging.getLogger(__name__)
 
@@ -44,23 +44,6 @@ def analyze_and_get_payload(
     return payload
 
 
-def analyze_and_get_text(
-    symbol: str,
-    tf: str,
-    *,
-    profile: Optional[str] = None,
-    cfg: Optional[Dict[str, Any]] = None,
-    xlsx_path: Optional[str] = None,
-) -> str:
-    """
-    วิเคราะห์และคืนข้อความสรุปสั้น (string) อย่างเดียว
-    เหมาะสำหรับ push/reply LINE โดยตรง
-    """
-    text = build_line_text(symbol, tf, profile=profile, cfg=cfg, xlsx_path=xlsx_path)
-    return text
-
-# app/engine/signal_engine.py
-
 def build_line_text(
     symbol: str,
     tf: str,
@@ -74,7 +57,10 @@ def build_line_text(
     if not payload.get("ok"):
         return f"❌ Error: {payload.get('error','unknown')}"
 
-    sig = payload["signal"]
+    sig = payload.get("signal")
+    if not sig:
+        return "❌ Error: signal not found in payload"
+
     probs = sig.get("probabilities", {})
     bias = sig.get("bias", "neutral")
     entry = sig.get("entry") or "-"
@@ -138,7 +124,7 @@ def analyze_batch(
     for sym in symbols:
         for tf in tfs:
             if as_text:
-                results.append(analyze_and_get_text(sym, tf, profile=profile, cfg=cfg, xlsx_path=xlsx_path))
+                results.append(build_line_text(sym, tf, profile=profile, cfg=cfg, xlsx_path=xlsx_path))
             else:
                 results.append(analyze_and_get_payload(sym, tf, profile=profile, cfg=cfg, xlsx_path=xlsx_path))
     return results
