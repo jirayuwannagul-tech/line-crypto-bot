@@ -10,10 +10,9 @@
 
 from __future__ import annotations
 from typing import Dict, Any, Optional, List
-
 import logging
 
-from app.engine.signal_engine import build_signal_payload
+from app.engine.signal_engine import build_signal_payload, build_line_text
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +43,7 @@ def analyze_and_get_payload(
     return payload
 
 
-def build_line_text(
+def analyze_and_get_text(
     symbol: str,
     tf: str,
     *,
@@ -52,50 +51,11 @@ def build_line_text(
     cfg: Optional[Dict[str, Any]] = None,
     xlsx_path: Optional[str] = None,
 ) -> str:
-    payload = build_signal_payload(symbol, tf, profile=profile, cfg=cfg, xlsx_path=xlsx_path)
-
-    if not payload.get("ok"):
-        return f"❌ Error: {payload.get('error','unknown')}"
-
-    sig = payload.get("signal")
-    if not sig:
-        return "❌ Error: signal not found in payload"
-
-    probs = sig.get("probabilities", {})
-    bias = sig.get("bias", "neutral")
-    entry = sig.get("entry") or "-"
-    sl    = sig.get("sl") or "-"
-    tp    = sig.get("tp") or "-"
-    last_price = sig.get("last_price", None)
-
-    # สรุป %UP/DOWN/SIDE
-    up_p   = probs.get("up", 0) * 100
-    down_p = probs.get("down", 0) * 100
-    side_p = probs.get("side", 0) * 100
-
-    lines = []
-    header = f"📊 {symbol} {tf} — สรุปสัญญาณ"
-    if last_price:
-        header += f"\nราคา: {last_price:,.2f} USDT"
-    lines.append(header)
-    lines.append(f"UP {up_p:.0f}% | DOWN {down_p:.0f}% | SIDE {side_p:.0f}%")
-    lines.append("")
-    lines.append(f"🎯 ทางเลือก (bias): {bias.upper()}")
-    lines.append(f"• Entry: {entry}")
-    lines.append(f"• SL: {sl}")
-    lines.append(f"• TP: {tp}")
-    lines.append("")
-
-    # แสดงเหตุผลจาก indicators/patterns (top 3)
-    reasons = sig.get("reasons", [])[:3]
-    if reasons:
-        lines.append("ℹ️ เหตุผลหลัก:")
-        for r in reasons:
-            msg = r.get("message","")
-            code = r.get("code","")
-            lines.append(f"• [{code}] {msg}")
-
-    return "\n".join(lines)
+    """
+    วิเคราะห์และคืนข้อความสรุปสั้น (string) อย่างเดียว
+    เหมาะสำหรับ push/reply LINE โดยตรง
+    """
+    return build_line_text(symbol, tf, profile=profile, cfg=cfg, xlsx_path=xlsx_path)
 
 
 # =============================================================================
@@ -124,7 +84,11 @@ def analyze_batch(
     for sym in symbols:
         for tf in tfs:
             if as_text:
-                results.append(build_line_text(sym, tf, profile=profile, cfg=cfg, xlsx_path=xlsx_path))
+                results.append(
+                    analyze_and_get_text(sym, tf, profile=profile, cfg=cfg, xlsx_path=xlsx_path)
+                )
             else:
-                results.append(analyze_and_get_payload(sym, tf, profile=profile, cfg=cfg, xlsx_path=xlsx_path))
+                results.append(
+                    analyze_and_get_payload(sym, tf, profile=profile, cfg=cfg, xlsx_path=xlsx_path)
+                )
     return results
