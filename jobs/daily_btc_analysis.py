@@ -1,8 +1,8 @@
 # jobs/daily_btc_analysis.py
 """
 Daily BTC Analysis Job
-ดึง BTCUSDT 1D (จาก provider) → อัปเดต app/data/historical.xlsx → ส่งเข้า engine วิเคราะห์
-ถ้ามีสัญญาณเข้าออก → ส่ง LINE แจ้งเตือน
+ดึง BTCUSDT 1D → อัปเดต app/data/historical.xlsx → ส่งเข้า engine วิเคราะห์
+ถ้ามีสัญญาณเข้า/ออก → ส่ง LINE แจ้งเตือน
 
 วิธีรัน:
     python -m jobs.daily_btc_analysis
@@ -19,7 +19,6 @@ from datetime import datetime, timezone
 
 import pandas as pd
 from pandas.api.types import is_datetime64tz_dtype
-import ccxt
 
 # === โปรเจกต์โมดูล ===
 from app.analysis.timeframes import get_data
@@ -27,20 +26,16 @@ from app.services.wave_service import analyze_wave, build_brief_message
 from app.analysis.entry_exit import suggest_trade, format_trade_text
 from app.adapters import delivery_line as line
 
-
+# ---------------- Config ----------------
 HIST_PATH = "app/data/historical.xlsx"
 SYMBOL = "BTCUSDT"
 TF = "1D"
-PROFILE = os.getenv("STRATEGY_PROFILE", "baseline")
+PROFILE = os.getenv("STRATEGY_PROFILE", "baseline")  # baseline | chinchot | cholak
+LINE_TO = os.getenv("LINE_DEFAULT_TO", "").strip()   # ถ้าเว้นว่างจะ broadcast
 
-# LINE targets (ถ้าไม่ได้ตั้ง จะใช้ broadcast)
-LINE_TO = os.getenv("LINE_DEFAULT_TO", "").strip()
-
-
-# ---------- Helpers ----------
+# -------------- Helpers -----------------
 def _now_utc_str() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-
 
 def _excel_sanitize_datetimes(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -57,24 +52,30 @@ def _excel_sanitize_datetimes(df: pd.DataFrame) -> pd.DataFrame:
             out[col] = s.dt.tz_convert("UTC").dt.tz_localize(None)
     return out
 
-
 def save_df_to_excel(df: pd.DataFrame, path: str, sheet: str) -> None:
     """
-    เขียนทั้งชีท (replace) เพื่อกัน schema เพี้ยน + ทำ tz-naive เสมอ
+    เขียนทั้งชีท (replace) เพื่อกัน schema เพี้ยน + ทำ tz‑naive เสมอ
     """
-    df = _excel_sanitize_datetimes(df)
-
-    # สร้างโฟลเดอร์ปลายทางถ้ายังไม่มี
+    # สร้างโฟลเดอร์ถ้ายังไม่มี
     os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    # บังคับให้ timestamp เป็นคอลัมน์ (กรณีเป็น index อยู่ก่อน)
+    df_to_write = df.copy()
+    if "timestamp" not in df_to_write.columns:
+        # ถ้า index เป็นเวลาจะย้ายมาไว้ในคอลัมน์ timestamp
+        if isinstance(df_to_write.index, pd.DatetimeIndex):
+            df_to_write = df_to_write.reset_index().rename(columns={"index": "timestamp"})
+
+    # ล้าง tz ในทุก datetime
+    df_to_write = _excel_sanitize_datetimes(df_to_write)
 
     mode = "a" if os.path.exists(path) else "w"
     if mode == "a":
         with pd.ExcelWriter(path, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
-            df.to_excel(writer, sheet_name=sheet, index=True)
+            df_to_write.to_excel(writer, sheet_name=sheet, index=False)
     else:
         with pd.ExcelWriter(path, engine="openpyxl", mode="w") as writer:
-            df.to_excel(writer, sheet_name=sheet, index=True)
-
+            df_to_write.to_excel(writer, sheet_name=sheet, index=False)
 
 def send_line(text: str) -> None:
     """
@@ -94,76 +95,25 @@ def send_line(text: str) -> None:
         except Exception:
             line.broadcast(text)
 
-def _normalize_symbol_to_ccxt(symbol: str) -> str:
-    """
-    แปลง 'BTCUSDT' -> 'BTC/USDT' (รูปแบบที่ ccxt ต้องการ)
-    ถ้าใส่มาเป็น 'BTC/USDT' อยู่แล้วจะคืนค่าเดิม
-    """
-    if "/" in symbol:
-        return symbol
-    if symbol.upper().endswith("USDT"):
-        base = symbol.upper().replace("USDT", "")
-        return f"{base}/USDT"
-    return symbol  # เผื่อกรณีอื่น
-
-def _map_tf_to_ccxt(tf: str) -> str:
-    """
-    map timeframes ให้เข้ากับ ccxt (ใช้ตัวพิมพ์เล็ก)
-    """
-    tf = tf.lower()
-    mapping = {
-        "1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m",
-        "1h": "1h", "2h": "2h", "4h": "4h", "6h": "6h", "8h": "8h", "12h": "12h",
-        "1d": "1d", "3d": "3d", "1w": "1w", "1mo": "1M", "1mth": "1M",
-    }
-    return mapping.get(tf, tf)
-
-def fetch_ohlcv_ccxt_binance(symbol: str, timeframe: str = "1d", limit: int = 1000) -> pd.DataFrame:
-    """
-    ดึง OHLCV สดจาก Binance ผ่าน ccxt → คืน DataFrame คอลัมน์: open, high, low, close, volume
-    index เป็น UTC tz‑naive (พร้อมเขียน Excel)
-    """
-    sym = _normalize_symbol_to_ccxt(symbol)
-    tf = _map_tf_to_ccxt(timeframe)
-
-    ex = ccxt.binance({"enableRateLimit": True})
-    raw = ex.fetch_ohlcv(sym, timeframe=tf, limit=limit)  # [[ts, o, h, l, c, v], ...]
-    if not raw:
-        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
-
-    df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
-    # ทำเป็น UTC tz‑naive แล้วตั้ง index
-    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_localize(None)
-    df = df.set_index("timestamp")
-    # ให้ชนกับ schema ในโปรเจกต์ (ถ้าต้องการคอลัมน์ครบ)
-    return df[["open", "high", "low", "close", "volume"]]
-
-
-# ---------- Main ----------
+# --------------- Main -------------------
 def main() -> None:
     print(f"[{_now_utc_str()}] Start daily BTC analysis job")
 
     # 1) โหลดราคาสด (ไม่ส่ง xlsx_path) → 1D ล่าสุดเต็มช่วง
     print("• Fetching fresh OHLCV from provider (1D)…")
-df_1d = get_data(SYMBOL, TF)
+    df_1d = get_data(SYMBOL, TF)  # ตอนนี้ get_data รองรับ fallback ccxt อยู่ในตัวแล้ว
 
-# --- Fallback: ถ้า get_data ว่าง → ไป ccxt/binance ทันที ---
-if df_1d is None or len(df_1d) == 0:
-    print("• get_data returned empty → fallback to ccxt/binance …")
-    # ลองทั้ง "1D" และ "1d" เผื่อ mapping
-    for tf_try in (TF, TF.lower()):
-        df_1d = fetch_ohlcv_ccxt_binance(SYMBOL, tf_try, limit=1500)
-        if len(df_1d) > 0:
-            print(f"• ccxt fetched: rows={len(df_1d)} timeframe={tf_try}")
-            break
-
-if df_1d is None or len(df_1d) == 0:
-    raise RuntimeError("get_data() returned empty df (and ccxt fallback also empty)")
-
+    # แสดงผลลัพธ์สั้น ๆ
+    n = len(df_1d) if df_1d is not None else 0
+    t0 = str(df_1d["timestamp"].iloc[0]) if n else "-"
+    t1 = str(df_1d["timestamp"].iloc[-1]) if n else "-"
+    print(f"• Loaded OHLCV rows={n} range={t0} → {t1}")
+    if n == 0:
+        raise RuntimeError("get_data() returned empty df")
 
     # 2) อัปเดต historical.xlsx (ชีท: BTCUSDT_1D) ให้เป็นข้อมูลล่าสุดเสมอ
     sheet_name = f"{SYMBOL}_{TF}"
-    print(f"• Writing latest data to {HIST_PATH} (sheet: {sheet_name}) … rows={len(df_1d)}")
+    print(f"• Writing latest data to {HIST_PATH} (sheet: {sheet_name}) … rows={n}")
     save_df_to_excel(df_1d, HIST_PATH, sheet_name)
 
     # 3) วิเคราะห์จากไฟล์เดียวกัน (ให้ pipeline อื่นอ้างอิงสอดคล้อง)
@@ -173,7 +123,6 @@ if df_1d is None or len(df_1d) == 0:
 
     # 4) สร้างสัญญาณเข้า/ออกตามโปรไฟล์ (ใช้ df จาก payload ถ้ามี)
     print("• Building trade suggestion …")
-    df_for_trade = {}
     try:
         df_for_trade = payload.get("debug", {}).get("df")
     except Exception:
@@ -188,7 +137,6 @@ if df_1d is None or len(df_1d) == 0:
     trade_text = format_trade_text(suggestion)
 
     # 5) ถ้ามีสัญญาณ → ส่ง LINE
-    has_entry = False
     try:
         entry = (suggestion or {}).get("entry") if isinstance(suggestion, dict) \
             else getattr(suggestion, "entry", None)
@@ -212,7 +160,7 @@ if df_1d is None or len(df_1d) == 0:
 
     print(f"[{_now_utc_str()}] Job done.")
 
-
+# ------------- Entrypoint --------------
 if __name__ == "__main__":
     try:
         main()
