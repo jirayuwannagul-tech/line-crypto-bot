@@ -15,6 +15,8 @@ import pandas as pd
 
 from app.analysis.timeframes import get_data
 from app.analysis.entry_exit import suggest_trade, format_trade_text
+from app.analysis import indicators  # 👈 เพิ่ม
+# (ไม่ใช้ scenarios ตรง ๆ เพราะเราจะทำ inline)
 
 __all__ = ["SignalEngine", "build_signal_payload", "build_line_text"]
 
@@ -26,6 +28,54 @@ def _env(name: str, default: Optional[str] = None) -> Optional[str]:
     return v if v is not None and v != "" else default
 
 DEFAULT_PROFILE = _env("STRATEGY_PROFILE", "baseline")  # fallback ถ้า caller ไม่ส่งมา
+
+# -----------------------------------------------------------------------------
+# Helper: สร้างเหตุผลและ % แนวโน้ม
+# -----------------------------------------------------------------------------
+def _build_reasons_text(df: pd.DataFrame) -> str:
+    rsi_val = indicators.rsi(df["close"], period=14).iloc[-1]
+    ema20 = indicators.ema(df["close"], period=20).iloc[-1]
+    ema50 = indicators.ema(df["close"], period=50).iloc[-1]
+    macd_line, signal_line, hist = indicators.macd(df["close"])
+    macd_val, signal_val, hist_val = macd_line.iloc[-1], signal_line.iloc[-1], hist.iloc[-1]
+
+    reasons = []
+    score_up, score_down = 0, 0
+
+    # RSI
+    if rsi_val < 45:
+        reasons.append(f"RSI={rsi_val:.2f} → ใกล้ Oversold")
+        score_up += 1
+    elif rsi_val > 65:
+        reasons.append(f"RSI={rsi_val:.2f} → ใกล้ Overbought")
+        score_down += 1
+    else:
+        reasons.append(f"RSI={rsi_val:.2f} → Neutral")
+
+    # EMA
+    if ema20 > ema50:
+        reasons.append("EMA20 > EMA50 → แนวโน้มขาขึ้นสั้น")
+        score_up += 1
+    else:
+        reasons.append("EMA20 < EMA50 → แนวโน้มอ่อนตัว")
+        score_down += 1
+
+    # MACD
+    if macd_val > signal_val:
+        reasons.append("MACD > Signal → โมเมนตัมเริ่มบวก")
+        score_up += 1
+    else:
+        reasons.append("MACD < Signal → โมเมนตัมลบ")
+        score_down += 1
+
+    # รวมคะแนน
+    total = max(score_up + score_down, 1)
+    up_pct = round(score_up / total * 100, 1)
+    down_pct = round(score_down / total * 100, 1)
+
+    reasons_text = "ℹ️ เหตุผลจากอินดิเคเตอร์\n- " + "\n- ".join(reasons)
+    summary = f"\n\n📈 แนวโน้มโดยรวม:\n- ขาขึ้น: {up_pct}%\n- ขาลง: {down_pct}%"
+    return reasons_text + summary
 
 # -----------------------------------------------------------------------------
 # Core engine
@@ -47,17 +97,6 @@ class SignalEngine:
     ) -> Dict[str, Any]:
         """
         วิเคราะห์สัญญาณหนึ่งชุดและคืน payload พร้อมข้อความสำหรับส่ง LINE
-
-        Returns:
-        {
-          "ok": bool,
-          "symbol": str,
-          "tf": str,
-          "profile": str,
-          "text": str,    # ข้อความสรุปสั้น
-          "trade": Dict,  # payload เต็มจาก suggest_trade()
-          "error": Optional[str],
-        }
         """
         cfg = cfg or {}
         use_profile = (profile or cfg.get("profile") or DEFAULT_PROFILE) or "baseline"
@@ -76,7 +115,7 @@ class SignalEngine:
                     "error": "No data loaded for symbol/timeframe.",
                 }
 
-            # 2) Build trade suggestion (ภายใน profile-aware)
+            # 2) Build trade suggestion
             trade = suggest_trade(
                 df,
                 symbol=symbol,
@@ -84,8 +123,12 @@ class SignalEngine:
                 cfg={**cfg, "profile": use_profile},
             )
 
-            # 3) Compose short text
-            text = format_trade_text(trade)
+            # 3) Compose short text (ของเดิม)
+            base_text = format_trade_text(trade)
+
+            # 4) Append เหตุผล + % ขึ้นลง
+            reasons_text = _build_reasons_text(df)
+            text = f"{base_text}\n\n{reasons_text}"
 
             return {
                 "ok": True,
@@ -109,7 +152,7 @@ class SignalEngine:
             }
 
 # -----------------------------------------------------------------------------
-# Convenience wrappers (backward‑compatible)
+# Convenience wrappers (backward-compatible)
 # -----------------------------------------------------------------------------
 def build_signal_payload(
     symbol: str,
@@ -119,7 +162,6 @@ def build_signal_payload(
     cfg: Optional[Dict[str, Any]] = None,
     xlsx_path: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Wrapper: คืน payload เดียวกับ SignalEngine.analyze_symbol()"""
     engine = SignalEngine(xlsx_path=xlsx_path)
     return engine.analyze_symbol(symbol, tf, profile=profile, cfg=cfg)
 
@@ -131,7 +173,6 @@ def build_line_text(
     cfg: Optional[Dict[str, Any]] = None,
     xlsx_path: Optional[str] = None,
 ) -> str:
-    """คืนข้อความสรุปอย่างเดียว — เหมาะสำหรับ push ผ่าน LINE"""
     payload = build_signal_payload(symbol, tf, profile=profile, cfg=cfg, xlsx_path=xlsx_path)
     if payload.get("ok"):
         return payload.get("text", "")
