@@ -15,5 +15,5 @@ def send_message(user_id, text):
     r = requests.post(url, json=payload, headers=headers)
     print(r.status_code, r.text)
 
-# เรียกใช้งาน
+# เรียกใช้
 send_message("Ub8c49a8dd3f65586e24b5062c3c4472e", "ทดสอบข้อความสำเร็จ 🚀")
