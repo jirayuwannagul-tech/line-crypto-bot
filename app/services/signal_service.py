@@ -59,6 +59,59 @@ def analyze_and_get_text(
     text = build_line_text(symbol, tf, profile=profile, cfg=cfg, xlsx_path=xlsx_path)
     return text
 
+# app/engine/signal_engine.py
+
+def build_line_text(
+    symbol: str,
+    tf: str,
+    *,
+    profile: Optional[str] = None,
+    cfg: Optional[Dict[str, Any]] = None,
+    xlsx_path: Optional[str] = None,
+) -> str:
+    payload = build_signal_payload(symbol, tf, profile=profile, cfg=cfg, xlsx_path=xlsx_path)
+
+    if not payload.get("ok"):
+        return f"❌ Error: {payload.get('error','unknown')}"
+
+    sig = payload["signal"]
+    probs = sig.get("probabilities", {})
+    bias = sig.get("bias", "neutral")
+    entry = sig.get("entry") or "-"
+    sl    = sig.get("sl") or "-"
+    tp    = sig.get("tp") or "-"
+    last_price = sig.get("last_price", None)
+
+    # สรุป %UP/DOWN/SIDE
+    up_p   = probs.get("up", 0) * 100
+    down_p = probs.get("down", 0) * 100
+    side_p = probs.get("side", 0) * 100
+
+    lines = []
+    header = f"📊 {symbol} {tf} — สรุปสัญญาณ"
+    if last_price:
+        header += f"\nราคา: {last_price:,.2f} USDT"
+    lines.append(header)
+    lines.append(f"UP {up_p:.0f}% | DOWN {down_p:.0f}% | SIDE {side_p:.0f}%")
+    lines.append("")
+    lines.append(f"🎯 ทางเลือก (bias): {bias.upper()}")
+    lines.append(f"• Entry: {entry}")
+    lines.append(f"• SL: {sl}")
+    lines.append(f"• TP: {tp}")
+    lines.append("")
+
+    # แสดงเหตุผลจาก indicators/patterns (top 3)
+    reasons = sig.get("reasons", [])[:3]
+    if reasons:
+        lines.append("ℹ️ เหตุผลหลัก:")
+        for r in reasons:
+            msg = r.get("message","")
+            code = r.get("code","")
+            lines.append(f"• [{code}] {msg}")
+
+    return "\n".join(lines)
+
+
 # =============================================================================
 # LAYER C) BATCH CONVENIENCE
 # -----------------------------------------------------------------------------
