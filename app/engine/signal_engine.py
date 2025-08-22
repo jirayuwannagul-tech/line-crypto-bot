@@ -5,7 +5,7 @@ from __future__ import annotations
 # -----------------------------------------------------------------------------
 # - จุดศูนย์กลางรันเครื่องวิเคราะห์สัญญาณสำหรับงาน batch/cron หรือ webhook
 # - ลำดับงาน: get_data → suggest_trade (profile-aware) → สร้าง payload/ข้อความ
-# - รักษา backward compatibility กับโค้ดเดิม
+# - รักษา backward compatibility กับโค้ดเดิม และรองรับ cfg ใน __init__
 # =============================================================================
 
 from typing import Dict, Optional, Any
@@ -15,8 +15,7 @@ import pandas as pd
 
 from app.analysis.timeframes import get_data
 from app.analysis.entry_exit import suggest_trade, format_trade_text
-from app.analysis import indicators  # 👈 เพิ่ม
-# (ไม่ใช้ scenarios ตรง ๆ เพราะเราจะทำ inline)
+from app.analysis import indicators  # ใช้สร้างเหตุผล & % แนวโน้ม
 
 __all__ = ["SignalEngine", "build_signal_payload", "build_line_text"]
 
@@ -29,6 +28,18 @@ def _env(name: str, default: Optional[str] = None) -> Optional[str]:
 
 DEFAULT_PROFILE = _env("STRATEGY_PROFILE", "baseline")  # fallback ถ้า caller ไม่ส่งมา
 
+# ค่าตั้งต้นสำหรับเอนจิน (สามารถเติม/แก้ได้ตามต้องการ)
+DEFAULT_CFG: Dict[str, Any] = {
+    "min_candles": 30,
+    "sma_fast": 10,
+    "sma_slow": 30,
+    "cooldown_sec": 0,
+    "risk_pct": 0.01,
+    "rr": 1.5,
+    "move_alerts": [],
+    # ช่องทางขยายในอนาคต...
+}
+
 # -----------------------------------------------------------------------------
 # Helper: สร้างเหตุผลและ % แนวโน้ม
 # -----------------------------------------------------------------------------
@@ -40,9 +51,9 @@ def _build_reasons_text(df: pd.DataFrame) -> str:
     macd_val, signal_val, hist_val = macd_line.iloc[-1], signal_line.iloc[-1], hist.iloc[-1]
 
     reasons = []
-    score_up, score_down = 0, 0
+    score_up, score_down = 0.0, 0.0
 
-       # RSI
+    # RSI
     if rsi_val < 45:
         reasons.append(f"RSI={rsi_val:.2f} → ใกล้ Oversold")
         score_up += 1
@@ -73,9 +84,8 @@ def _build_reasons_text(df: pd.DataFrame) -> str:
         reasons.append("MACD < Signal → โมเมนตัมลบ")
         score_down += 1
 
-
     # รวมคะแนน
-    total = max(score_up + score_down, 1)
+    total = max(score_up + score_down, 1.0)
     up_pct = round(score_up / total * 100, 1)
     down_pct = round(score_down / total * 100, 1)
 
@@ -87,11 +97,31 @@ def _build_reasons_text(df: pd.DataFrame) -> str:
 # Core engine
 # -----------------------------------------------------------------------------
 class SignalEngine:
-    def __init__(self, *, xlsx_path: Optional[str] = None):
+    def __init__(self, cfg: Optional[Dict[str, Any]] = None, *, xlsx_path: Optional[str] = None, **kwargs):
         """
+        รองรับทั้ง:
+          - ส่ง dict ผ่าน cfg (รูปแบบที่ tests ใช้): SignalEngine(cfg={...})
+          - ส่งคีย์เดี่ยว ๆ ผ่าน kwargs: SignalEngine(min_candles=50, sma_fast=10, ...)
+        kwargs จะ override cfg; ทั้งหมดถูก merge เข้ากับ DEFAULT_CFG
+
         xlsx_path: override เส้นทางไฟล์ historical.xlsx ได้ถ้าต้องการ
         """
+        base = dict(DEFAULT_CFG)
+        if cfg:
+            base.update(cfg)
+        if kwargs:
+            base.update(kwargs)
+
+        self.cfg: Dict[str, Any] = base
         self.xlsx_path = xlsx_path
+
+        # map เป็นแอตทริบิวต์เพื่อความสะดวก / compat
+        for k, v in base.items():
+            setattr(self, k, v)
+
+        # state เริ่มต้น (หากโค้ดส่วนอื่นต้องการ)
+        self._last_open_ts = getattr(self, "_last_open_ts", None)
+        self._position = getattr(self, "_position", None)
 
     def analyze_symbol(
         self,
@@ -104,8 +134,12 @@ class SignalEngine:
         """
         วิเคราะห์สัญญาณหนึ่งชุดและคืน payload พร้อมข้อความสำหรับส่ง LINE
         """
-        cfg = cfg or {}
-        use_profile = (profile or cfg.get("profile") or DEFAULT_PROFILE) or "baseline"
+        # merge cfg ที่ส่งมาระดับเมธอดกับ cfg ของเอนจิน
+        runtime_cfg = dict(self.cfg)
+        if cfg:
+            runtime_cfg.update(cfg)
+
+        use_profile = (profile or runtime_cfg.get("profile") or DEFAULT_PROFILE) or "baseline"
 
         try:
             # 1) Load OHLCV
@@ -126,12 +160,13 @@ class SignalEngine:
                 df,
                 symbol=symbol,
                 tf=tf,
-                cfg={**cfg, "profile": use_profile},
+                cfg={**runtime_cfg, "profile": use_profile},
             )
 
             # 3) Compose short text (ของเดิม)
             base_text = format_trade_text(trade)
             base_text = base_text.replace("ℹ️ เหตุผล:", "").strip()
+
             # 4) Append เหตุผล + % ขึ้นลง
             reasons_text = _build_reasons_text(df)
             text = f"{base_text}\n\n{reasons_text}"
@@ -168,7 +203,7 @@ def build_signal_payload(
     cfg: Optional[Dict[str, Any]] = None,
     xlsx_path: Optional[str] = None,
 ) -> Dict[str, Any]:
-    engine = SignalEngine(xlsx_path=xlsx_path)
+    engine = SignalEngine(cfg=cfg, xlsx_path=xlsx_path)
     return engine.analyze_symbol(symbol, tf, profile=profile, cfg=cfg)
 
 def build_line_text(
