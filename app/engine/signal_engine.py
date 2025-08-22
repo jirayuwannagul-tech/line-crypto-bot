@@ -106,6 +106,7 @@ class SignalEngine:
             setattr(self, k, v)
 
         self._pos: Dict[str, Dict[str, Any]] = {}
+        # _states: {symbol: SimpleNamespace(last_signal_ts=float, last_alert_price=float|None)}
         self._states: Dict[str, SimpleNamespace] = {}
 
     def _ensure_state(self, symbol: str) -> SimpleNamespace:
@@ -127,6 +128,7 @@ class SignalEngine:
         }
 
     def process_ohlcv(self, symbol: str, df: pd.DataFrame, *, use_ai: bool = False) -> Dict[str, Any]:
+        # --- analysis.pre_signal.confidence ---
         if len(df) > 0:
             close = df["close"].iloc[-1]
             open_ = df["open"].iloc[-1]
@@ -158,6 +160,7 @@ class SignalEngine:
             "position": self._position_dict(pos),
         }
 
+        # --- checks ---
         if len(df) < int(self.cfg["min_candles"]):
             out["reason"] = "insufficient_candles"
             return out
@@ -169,6 +172,7 @@ class SignalEngine:
 
         st = self._ensure_state(symbol)
 
+        # --- if in position: manage & exit ---
         if pos and pos.get("side") == "LONG":
             entry = float(pos["entry"])
             tp = float(pos["tp"])
@@ -176,6 +180,7 @@ class SignalEngine:
             anchor = float(pos.get("anchor", entry))
             cur = float(df["close"].iloc[-1])
 
+            # move alerts
             alerts: List[str] = []
             for th in sorted(self.cfg.get("move_alerts", [])):
                 if th and th > 0 and cur >= anchor * (1 + th):
@@ -187,28 +192,27 @@ class SignalEngine:
                 st.last_alert_price = anchor
                 out["position"] = self._position_dict(pos)
 
+            # exits
             if cur >= tp:
                 pnl = (cur - entry) / entry
-                closed_pos = self._position_dict(pos)
                 self._pos.pop(symbol, None)
                 out.update({
                     "action": "CLOSE",
                     "side": "LONG",
                     "reason": "exit_tp",
                     "pnl": pnl,
-                    "position": closed_pos,
+                    "position": {"side": "NONE"},  # ✅ หลังปิดต้อง NONE
                 })
                 return out
             if cur <= sl:
                 pnl = (cur - entry) / entry
-                closed_pos = self._position_dict(pos)
                 self._pos.pop(symbol, None)
                 out.update({
                     "action": "CLOSE",
                     "side": "LONG",
                     "reason": "exit_sl",
                     "pnl": pnl,
-                    "position": closed_pos,
+                    "position": {"side": "NONE"},  # ✅ หลังปิดต้อง NONE
                 })
                 return out
 
@@ -220,6 +224,7 @@ class SignalEngine:
             })
             return out
 
+        # --- consider open ---
         now = time.time()
         cooldown = float(self.cfg.get("cooldown_sec", 0) or 0)
         if cooldown > 0 and (now - (st.last_signal_ts or 0)) < cooldown:
@@ -250,7 +255,7 @@ class SignalEngine:
                 "side": "LONG",
                 "reason": "new_long",
                 "position": self._position_dict(new_pos),
-                "tp": tp,
+                "tp": tp,  # คีย์ระดับบนที่เทสต้องการ
                 "sl": sl,
             })
             return out
@@ -258,6 +263,7 @@ class SignalEngine:
         out.update({"reason": "no_setup"})
         return out
 
+    # ===== สำหรับใช้งานกับ data loader ภายใน และ compose ข้อความ LINE =====
     def analyze_symbol(
         self,
         symbol: str,
@@ -292,9 +298,7 @@ class SignalEngine:
                 cfg={**runtime_cfg, "profile": use_profile},
             )
 
-            base_text = format_trade_text(trade)
-            base_text = base_text.replace("ℹ️ เหตุผล:", "").strip()
-
+            base_text = format_trade_text(trade).replace("ℹ️ เหตุผล:", "").strip()
             reasons_text = _build_reasons_text(df)
             text = f"{base_text}\n\n{reasons_text}"
 
