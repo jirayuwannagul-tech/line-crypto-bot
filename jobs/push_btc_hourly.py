@@ -19,6 +19,8 @@
 #   # หรือ
 #   python jobs/push_btc_hourly.py
 # =============================================================================
+from dotenv import load_dotenv, find_dotenv
+load_dotenv(find_dotenv(usecwd=True))
 
 from __future__ import annotations
 import os
