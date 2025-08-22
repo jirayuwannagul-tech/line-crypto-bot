@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 
 import pandas as pd
 from pandas.api.types import is_datetime64tz_dtype
+import ccxt
 
 # === โปรเจกต์โมดูล ===
 from app.analysis.timeframes import get_data
@@ -93,6 +94,50 @@ def send_line(text: str) -> None:
         except Exception:
             line.broadcast(text)
 
+def _normalize_symbol_to_ccxt(symbol: str) -> str:
+    """
+    แปลง 'BTCUSDT' -> 'BTC/USDT' (รูปแบบที่ ccxt ต้องการ)
+    ถ้าใส่มาเป็น 'BTC/USDT' อยู่แล้วจะคืนค่าเดิม
+    """
+    if "/" in symbol:
+        return symbol
+    if symbol.upper().endswith("USDT"):
+        base = symbol.upper().replace("USDT", "")
+        return f"{base}/USDT"
+    return symbol  # เผื่อกรณีอื่น
+
+def _map_tf_to_ccxt(tf: str) -> str:
+    """
+    map timeframes ให้เข้ากับ ccxt (ใช้ตัวพิมพ์เล็ก)
+    """
+    tf = tf.lower()
+    mapping = {
+        "1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m",
+        "1h": "1h", "2h": "2h", "4h": "4h", "6h": "6h", "8h": "8h", "12h": "12h",
+        "1d": "1d", "3d": "3d", "1w": "1w", "1mo": "1M", "1mth": "1M",
+    }
+    return mapping.get(tf, tf)
+
+def fetch_ohlcv_ccxt_binance(symbol: str, timeframe: str = "1d", limit: int = 1000) -> pd.DataFrame:
+    """
+    ดึง OHLCV สดจาก Binance ผ่าน ccxt → คืน DataFrame คอลัมน์: open, high, low, close, volume
+    index เป็น UTC tz‑naive (พร้อมเขียน Excel)
+    """
+    sym = _normalize_symbol_to_ccxt(symbol)
+    tf = _map_tf_to_ccxt(timeframe)
+
+    ex = ccxt.binance({"enableRateLimit": True})
+    raw = ex.fetch_ohlcv(sym, timeframe=tf, limit=limit)  # [[ts, o, h, l, c, v], ...]
+    if not raw:
+        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
+    df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    # ทำเป็น UTC tz‑naive แล้วตั้ง index
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_localize(None)
+    df = df.set_index("timestamp")
+    # ให้ชนกับ schema ในโปรเจกต์ (ถ้าต้องการคอลัมน์ครบ)
+    return df[["open", "high", "low", "close", "volume"]]
+
 
 # ---------- Main ----------
 def main() -> None:
@@ -100,9 +145,21 @@ def main() -> None:
 
     # 1) โหลดราคาสด (ไม่ส่ง xlsx_path) → 1D ล่าสุดเต็มช่วง
     print("• Fetching fresh OHLCV from provider (1D)…")
-    df_1d = get_data(SYMBOL, TF)
-    if df_1d is None or len(df_1d) == 0:
-        raise RuntimeError("get_data() returned empty df")
+df_1d = get_data(SYMBOL, TF)
+
+# --- Fallback: ถ้า get_data ว่าง → ไป ccxt/binance ทันที ---
+if df_1d is None or len(df_1d) == 0:
+    print("• get_data returned empty → fallback to ccxt/binance …")
+    # ลองทั้ง "1D" และ "1d" เผื่อ mapping
+    for tf_try in (TF, TF.lower()):
+        df_1d = fetch_ohlcv_ccxt_binance(SYMBOL, tf_try, limit=1500)
+        if len(df_1d) > 0:
+            print(f"• ccxt fetched: rows={len(df_1d)} timeframe={tf_try}")
+            break
+
+if df_1d is None or len(df_1d) == 0:
+    raise RuntimeError("get_data() returned empty df (and ccxt fallback also empty)")
+
 
     # 2) อัปเดต historical.xlsx (ชีท: BTCUSDT_1D) ให้เป็นข้อมูลล่าสุดเสมอ
     sheet_name = f"{SYMBOL}_{TF}"
