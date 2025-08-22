@@ -9,3 +9,5 @@ python-dateutil>=2.9.0
 pyyaml>=6.0.1
 line-bot-sdk>=3.10.0
 python-multipart>=0.0.9
+ccxt>=4.3.59
+

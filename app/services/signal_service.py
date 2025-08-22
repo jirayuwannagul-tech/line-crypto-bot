@@ -1,4 +1,3 @@
-# app/services/signal_service.py
 # =============================================================================
 # LAYER A) OVERVIEW
 # -----------------------------------------------------------------------------
@@ -13,6 +12,7 @@ from typing import Dict, Any, Optional, List
 import logging
 
 from app.engine.signal_engine import build_signal_payload, build_line_text
+from app.adapters import price_provider
 
 logger = logging.getLogger(__name__)
 
@@ -92,3 +92,25 @@ def analyze_batch(
                     analyze_and_get_payload(sym, tf, profile=profile, cfg=cfg, xlsx_path=xlsx_path)
                 )
     return results
+
+
+# =============================================================================
+# LAYER D) PRICE FETCH SERVICE (ใหม่, Binance ผ่าน ccxt)
+# -----------------------------------------------------------------------------
+# อธิบาย:
+# - เพิ่ม service function สำหรับดึงราคาแบบ real-time
+# - เรียกจาก adapter.price_provider
+# =============================================================================
+
+def fetch_price(symbol: str = "BTC/USDT") -> Optional[float]:
+    """
+    คืนราคาล่าสุดจาก Binance (float) ผ่าน ccxt
+    """
+    return price_provider.get_spot_ccxt(symbol)
+
+
+def fetch_price_text(symbol: str = "BTC/USDT") -> str:
+    """
+    คืนราคาล่าสุดจาก Binance (string) ใช้ส่งต่อ LINE ได้เลย
+    """
+    return price_provider.get_spot_text_ccxt(symbol)

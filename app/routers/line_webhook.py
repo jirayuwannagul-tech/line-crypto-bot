@@ -1,4 +1,3 @@
-# app/routers/line_webhook.py
 # =============================================================================
 # LAYER A) OVERVIEW (FastAPI Router for LINE Webhook)
 # -----------------------------------------------------------------------------
@@ -17,7 +16,7 @@ import logging
 
 from fastapi import APIRouter, Request, HTTPException
 
-from app.services.signal_service import analyze_and_get_text
+from app.services import signal_service
 from app.adapters.delivery_line import LineDelivery
 
 router = APIRouter()
@@ -54,6 +53,7 @@ def _client() -> LineDelivery:
 #   "analyze BTCUSDT 1D profile:chinchot"
 #   "analyze ethusdt 4h"
 #   "btc 1d"
+#   "ราคา btc"
 #   ไม่มีคำสั่ง → ใช้ค่า default
 # =============================================================================
 
@@ -119,19 +119,35 @@ async def line_webhook(request: Request) -> Dict[str, Any]:
             if msg.get("type") != "text":
                 continue
 
-            user_text = msg.get("text", "")
-            args = _parse_text(user_text)
-            symbol = args["symbol"]
-            tf = args["tf"]
-            profile = args["profile"]
+            user_text = msg.get("text", "").strip()
+            reply_text = None
 
-            # วิเคราะห์แล้วสร้างข้อความสำหรับตอบ
-            reply_text = analyze_and_get_text(symbol, tf, profile=profile)
+            # 👉 ใหม่: ถ้าผู้ใช้พิมพ์ "ราคา ..."
+            if user_text.lower().startswith("ราคา"):
+                # แยก symbol (default=BTC/USDT)
+                parts = user_text.split()
+                if len(parts) >= 2:
+                    sym = parts[1].upper()
+                    if not sym.endswith("USDT"):
+                        sym = sym + "USDT"
+                else:
+                    sym = "BTCUSDT"
+                reply_text = signal_service.fetch_price_text(sym)
+
+            else:
+                # 👉 เดิม: ใช้ engine วิเคราะห์
+                args = _parse_text(user_text)
+                symbol = args["symbol"]
+                tf = args["tf"]
+                profile = args["profile"]
+
+                reply_text = signal_service.analyze_and_get_text(symbol, tf, profile=profile)
 
             # ส่งกลับผ่าน replyToken
             reply_token = ev.get("replyToken")
-            if reply_token:
+            if reply_token and reply_text:
                 _client().reply_text(reply_token, reply_text)
+
         except Exception as e:
             log.exception("LINE webhook event error: %s", e)
 
