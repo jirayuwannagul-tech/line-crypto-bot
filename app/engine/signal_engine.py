@@ -121,13 +121,13 @@ class SignalEngine:
         # สถานะต่อสัญลักษณ์
         # _pos: {symbol: {side, entry, tp, sl, anchor}}
         self._pos: Dict[str, Dict[str, Any]] = {}
-        # _states: {symbol: SimpleNamespace(last_signal_ts=float)}
+        # _states: {symbol: SimpleNamespace(last_signal_ts=float, last_alert_price=float)}
         self._states: Dict[str, SimpleNamespace] = {}
 
     def _ensure_state(self, symbol: str) -> SimpleNamespace:
         st = self._states.get(symbol)
         if st is None:
-            st = SimpleNamespace(last_signal_ts=0.0)
+            st = SimpleNamespace(last_signal_ts=0.0, last_alert_price=None)
             self._states[symbol] = st
         return st
 
@@ -156,9 +156,10 @@ class SignalEngine:
           - รองรับ move_alerts: ยิง alerts และอัปเดต anchor
           - คืน analysis.pre_signal.confidence เสมอ
           - คืน position เสมอ (ถ้าไม่มี → side=NONE)
+          - บน OPEN ต้องมีคีย์ระดับบน: tp, sl
+          - มี _states[symbol].last_alert_price และอัปเดตเมื่อเปิด/เกิด move alert
         """
         # analysis.pre_signal.confidence
-        # (คำนวณล่วงหน้าเพื่อคืนในทุกกรณี)
         if len(df) > 0:
             close = df["close"].iloc[-1]
             open_ = df["open"].iloc[-1]
@@ -201,6 +202,8 @@ class SignalEngine:
         sma_fast = df["close"].rolling(window=fast_n).mean().iloc[-1]
         sma_slow = df["close"].rolling(window=slow_n).mean().iloc[-1]
 
+        st = self._ensure_state(symbol)
+
         # 2) ถ้ามีสถานะ LONG อยู่แล้ว → ตรวจ TP/SL และ move_alerts
         if pos and pos.get("side") == "LONG":
             entry = float(pos["entry"])
@@ -218,12 +221,12 @@ class SignalEngine:
             if alerts:
                 out["alerts"] = alerts
                 pos["anchor"] = anchor
+                st.last_alert_price = anchor  # อัปเดต state
                 out["position"] = self._position_dict(pos)
 
             # TP / SL
             if cur >= tp:
                 pnl = (cur - entry) / entry
-                # เก็บสำเนาตำแหน่งก่อนลบ
                 closed_pos = self._position_dict(pos)
                 self._pos.pop(symbol, None)
                 out.update({
@@ -257,7 +260,6 @@ class SignalEngine:
             return out
 
         # 3) ยังไม่มีสถานะ → พิจารณาเปิด LONG (เช็ก cooldown ก่อน)
-        st = self._ensure_state(symbol)
         now = time.time()
         cooldown = float(self.cfg.get("cooldown_sec", 0) or 0)
         if cooldown > 0 and (now - (st.last_signal_ts or 0)) < cooldown:
@@ -282,12 +284,16 @@ class SignalEngine:
             }
             self._pos[symbol] = new_pos
             st.last_signal_ts = now
+            st.last_alert_price = entry  # ตั้ง anchor เริ่มต้นสำหรับ state
 
             out.update({
                 "action": "OPEN",
                 "side": "LONG",
                 "reason": "new_long",
                 "position": self._position_dict(new_pos),
+                # >>> คีย์ระดับบนที่เทสต้องการ
+                "tp": tp,
+                "sl": sl,
             })
             return out
 
