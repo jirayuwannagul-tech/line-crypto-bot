@@ -1,108 +1,159 @@
-# Strategy Profiles (ready-to-use)
-# ใช้กำหนดคอนฟิกกลยุทธ์และน้ำหนักอินดิเคเตอร์/แพทเทิร์น/ฟิลเตอร์
-# เลือกใช้โดย service/engine ตามชื่อ profile
-
-version: 1
+# app/config/strategy_profiles.yaml
+# =============================================================================
+# LAYER A) METADATA & DEFAULTS
+# -----------------------------------------------------------------------------
+# อธิบาย: ตั้งค่าพื้นฐานและคำอธิบายโครงสร้างไฟล์ เพื่อให้ส่วนวิเคราะห์/สัญญาณ
+# (scenarios.py, entry_exit.py, signal_engine.py) สามารถโหลดค่าดีฟอลต์ได้
+# =============================================================================
+meta:
+  version: 1
+  updated: "2025-08-22"
+  description: >
+    Strategy profiles for Elliott‑driven decisioning. Profiles control voting
+    weights, confirmation rules (EMA/RSI), and target construction (Fibonacci).
 
 defaults:
-  use_ai: false            # เปิด/ปิด AI วิเคราะห์เสริมระดับโปรไฟล์
-  threshold:
-    bias_long: 0.60        # เกณฑ์ตัดสินใจฝั่ง Long
-    bias_short: 0.60       # เกณฑ์ตัดสินใจฝั่ง Short
-  indicators:
-    # ค่าเริ่มต้นความยาวต่าง ๆ (บางส่วน engine อาจไม่ใช้ทั้งหมดก็ได้)
-    sma_fast: 10
-    sma_slow: 30
-    ema_fast: 12
-    ema_slow: 26
-    rsi_length: 14
-    macd_fast: 12
-    macd_slow: 26
-    macd_signal: 9
-    bb_length: 20
-    bb_mult: 2.0
-    atr_length: 14
-  weights:
-    # น้ำหนักรวมไม่จำเป็นต้อง = 1.0 (engine จะ normalize เองได้)
-    rsi: 0.20
-    macd: 0.20
-    trend_ma: 0.25          # SMA/EMA slope/cross
-    bb_squeeze: 0.15
-    breakout: 0.20
+  # เกณฑ์ขั้นต่ำ—ใช้เมื่อโปรไฟล์ไม่กำหนดค่า
+  min_prob: 0            # % ขั้นต่ำของทิศทางที่เลือก (0..100)
+  min_rr: 1.20           # Risk:Reward ขั้นต่ำ
+  use_pct_targets: false # ใช้ TP/SL แบบ % จาก Entry แทน swing/fibo
+  sl_pct: 0.03           # 3% SL (เมื่อ use_pct_targets=true)
+  tp_pcts: [0.03, 0.07, 0.12]  # TP1/TP2/TP3 เป็น % (เมื่อใช้โหมด %)
 
-filters:
-  # เปิด/ปิด และพารามิเตอร์ของตัวกรองตลาด
-  trend:
-    enabled: true
-    min_strength: 0.5
-  volatility:
-    enabled: true
-    min_atr_pct: 0.005      # 0.5% ของราคา
-  session:
-    enabled: true
-    allowed: "24/7"         # asia|eu|us|24/7
-  volume:
-    enabled: false
-    min_multiple_of_avg: 1.0
-    lookback: 20
+  # เงื่อนไขคอนเฟิร์มสัญญาณ
+  confirm:
+    rsi_bull_min: 55     # RSI ≥ 55 ถือว่าหนุนฝั่งขาขึ้น
+    rsi_bear_max: 45     # RSI ≤ 45 ถือว่าหนุนฝั่งขาลง
+    ema_structure_required: false  # บังคับโครงสร้าง EMA ให้ตรงทิศหรือไม่
+    atr_min_pct: 0.004   # ATR% ขั้นต่ำ (0.4%) เพื่อกันสัญญาณในตลาดนิ่ง
 
+  # ค่า Fibonacci ที่ใช้ทั่วไป
+  fibo:
+    retr: [0.382, 0.5, 0.618]
+    ext:  [1.272, 1.618]
+    cluster_tolerance: 0.003   # 0.3% ระยะห่างสูงสุดของคลัสเตอร์
+
+  # น้ำหนักโหวตสำหรับ scenarios (ใช้เป็น multiplier ต่อ logit ภายใน)
+  voting:
+    elliott_weight: 1.00
+    dow_weight: 0.80
+    indicators_weight: 0.60
+    side_range_threshold: 0.035 # ถ้าระยะ 20 แท่ง < 3.5% → SIDE bias
+
+  # ตัวเลือกเสริม
+  momentum_triggers:
+    rsi_bull_trigger: 57       # ทริกเกอร์เข้าฝั่งบูลจากโมเมนตัม
+    rsi_bear_trigger: 43       # ทริกเกอร์เข้าฝั่งแบร์จากโมเมนตัม
+    macd_hist_bias_weight: 0.15
+
+# =============================================================================
+# LAYER B) PROFILES
+# -----------------------------------------------------------------------------
+# อธิบาย: โปรไฟล์สำเร็จรูปที่ปรับ “คาแรกเตอร์” การตัดสินใจ
+# - baseline  : ค่ากลาง ใช้งานได้เลยถ้าไม่ระบุโปรไฟล์
+# - cholak    : โทนอนุรักษ์นิยม ภาพใหญ่เป็นหลัก ต้องคอนเฟิร์มชัด
+# - chinchot  : โทนเชิงรุก เข้าเร็วขึ้นเมื่อมี Fibo cluster + โมเมนตัม
+# =============================================================================
 profiles:
 
-  momentum_breakout:
-    description: "หาโมเมนตัมที่บีบแล้วเบรกด้วย RSI/MACD คอนเฟิร์ม"
-    use_ai: false
-    indicators:
-      sma_fast: 10
-      sma_slow: 30
-      rsi_length: 14
-      macd_fast: 12
-      macd_slow: 26
-      macd_signal: 9
-      bb_length: 20
-      bb_mult: 2.0
-      atr_length: 14
-    weights:
-      rsi: 0.20
-      macd: 0.20
-      trend_ma: 0.30
-      bb_squeeze: 0.15
-      breakout: 0.15
-    threshold:
-      bias_long: 0.60
-      bias_short: 0.60
+  baseline:
+    min_prob: 50
+    min_rr: 1.30
+    use_pct_targets: false
+    sl_pct: 0.03
+    tp_pcts: [0.03, 0.07, 0.12]
+    confirm:
+      rsi_bull_min: 55
+      rsi_bear_max: 45
+      ema_structure_required: false
+      atr_min_pct: 0.004
+    fibo:
+      retr: [0.382, 0.5, 0.618]
+      ext:  [1.272, 1.618]
+      cluster_tolerance: 0.0035
+    voting:
+      elliott_weight: 1.10
+      dow_weight: 0.90
+      indicators_weight: 0.70
+      side_range_threshold: 0.035
+    momentum_triggers:
+      rsi_bull_trigger: 57
+      rsi_bear_trigger: 43
+      macd_hist_bias_weight: 0.15
+    overrides:
+      by_timeframe:
+        "1D": { min_rr: 1.40 }
+        "4H": { min_rr: 1.30 }
+        "1H": { min_rr: 1.20 }
 
-  trend_pullback:
-    description: "เข้าเทรนด์ระยะกลางเมื่อเกิดรีเทส EMA/VWAP แล้วเด้ง"
-    use_ai: false
-    indicators:
-      ema_fast: 20
-      ema_slow: 50
-      rsi_length: 14
-      atr_length: 14
-    weights:
-      trend_ma: 0.40
-      rsi: 0.20
-      macd: 0.15
-      breakout: 0.10
-      bb_squeeze: 0.15
-    threshold:
-      bias_long: 0.65
-      bias_short: 0.65
+  cholak:   # ลุงโฉลก – เน้นภาพใหญ่/วัฏจักร อนุรักษ์นิยม รอคอนเฟิร์มชัด
+    min_prob: 55
+    min_rr: 1.50
+    use_pct_targets: false
+    sl_pct: 0.03
+    tp_pcts: [0.03, 0.07, 0.12]
+    confirm:
+      rsi_bull_min: 56
+      rsi_bear_max: 44
+      ema_structure_required: true   # บังคับ EMA โครงสร้างให้ตรงทิศ
+      atr_min_pct: 0.005             # ต้องมี volatility มากกว่า baseline
+    fibo:
+      retr: [0.382, 0.5, 0.618]
+      ext:  [1.272, 1.618]
+      cluster_tolerance: 0.003       # คลัสเตอร์ต้องแน่นขึ้น
+    voting:
+      elliott_weight: 1.40
+      dow_weight: 1.00
+      indicators_weight: 0.70
+      side_range_threshold: 0.030
+    momentum_triggers:
+      rsi_bull_trigger: 58
+      rsi_bear_trigger: 42
+      macd_hist_bias_weight: 0.12
+    overrides:
+      by_timeframe:
+        "1D": { min_rr: 1.60 }
+        "4H": { min_rr: 1.50 }
+        "1H": { min_rr: 1.40 }
 
-  mean_reversion:
-    description: "ราคาเบี่ยงเบนจากค่าเฉลี่ย/แบนด์สูง คาดหวังเด้งกลับ"
-    use_ai: false
-    indicators:
-      bb_length: 20
-      bb_mult: 2.0
-      rsi_length: 14
-      atr_length: 14
-    weights:
-      bb_squeeze: 0.30
-      rsi: 0.30
-      trend_ma: 0.10
-      macd: 0.15
-      breakout: 0.15
-    threshold:
-      bias_long: 0.55
-      bias_short: 0.55
+  chinchot: # ชินโชติ – เชิงรุกกว่า เข้าใกล้ Fibo cluster + โมเมนตัม
+    min_prob: 45
+    min_rr: 1.00
+    use_pct_targets: true
+    sl_pct: 0.025
+    tp_pcts: [0.02, 0.05, 0.09]
+    confirm:
+      rsi_bull_min: 53
+      rsi_bear_max: 47
+      ema_structure_required: false
+      atr_min_pct: 0.0035
+    fibo:
+      retr: [0.382, 0.5, 0.618, 0.786]  # เพิ่ม 78.6 สำหรับ timing ระยะสั้น
+      ext:  [1.272, 1.618, 2.0]
+      cluster_tolerance: 0.0045        # ยืดหยุ่นคลัสเตอร์มากขึ้น
+    voting:
+      elliott_weight: 1.20
+      dow_weight: 0.80
+      indicators_weight: 0.90          # ให้โมเมนตัมมีน้ำหนักมากขึ้น
+      side_range_threshold: 0.040
+    momentum_triggers:
+      rsi_bull_trigger: 56
+      rsi_bear_trigger: 44
+      macd_hist_bias_weight: 0.18
+    overrides:
+      by_timeframe:
+        "1D": { min_rr: 1.10 }
+        "4H": { min_rr: 1.00 }
+        "1H": { min_rr: 0.90 }
+
+# =============================================================================
+# LAYER C) NOTES FOR IMPLEMENTERS
+# -----------------------------------------------------------------------------
+# - ส่วนโค้ดควรอ่านไฟล์นี้แบบ optional: หากหาไม่พบ ให้ fallback ไปที่ defaults
+# - การเลือกโปรไฟล์:
+#     profile_name = cfg.get("profile", "baseline")
+# - การใช้ overrides.by_timeframe:
+#     ถ้ามีคีย์ตรงกับ TF ปัจจุบัน ให้ merge ค่าทับโปรไฟล์หลัก
+# - ค่า cluster_tolerance ใช้กับ logic ตรวจ Fibo cluster (เช่น ระยะห่าง/ราคาเฉลี่ย)
+# - side_range_threshold ใช้เป็นเกณฑ์กะทัดรัดในการให้คะแนน SIDE เมื่อราคาแกว่งแคบ
+# =============================================================================

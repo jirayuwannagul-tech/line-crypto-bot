@@ -1,38 +1,76 @@
+# app/adapters/delivery_line.py
+# =============================================================================
+# LAYER A) OVERVIEW
+# -----------------------------------------------------------------------------
+# คลาส LineDelivery — adapter สำหรับ LINE Messaging API
+# - reply_text(reply_token, text): ตอบกลับข้อความที่ผู้ใช้ส่งมา
+# - push_text(to, text): ส่งข้อความหา user/room/group
+# - broadcast_text(text): กระจายข้อความไปยังทุกคน (ระวัง quota)
+#
+# ใช้ requests.post ตรง (ถ้าอยากเปลี่ยน lib → เปลี่ยนที่นี่ทีเดียว)
+# =============================================================================
+
+from __future__ import annotations
+import requests
 import logging
-from pathlib import Path
-from typing import Iterable
-from dotenv import load_dotenv
+from typing import Optional, Dict, Any
 
-# โหลดค่า .env เฉพาะตอนรัน local (บน Render จะอ่าน ENV เอง)
-load_dotenv(dotenv_path=Path(".") / ".env")
+log = logging.getLogger(__name__)
 
-from app.adapters.line.client import reply_message as _reply
-from app.adapters.line.client import push_message as _push
-from app.adapters.line.client import broadcast_message as _broadcast
+LINE_REPLY_URL = "https://api.line.me/v2/bot/message/reply"
+LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
+LINE_BROADCAST_URL = "https://api.line.me/v2/bot/message/broadcast"
 
-logger = logging.getLogger(__name__)
+class LineDelivery:
+    def __init__(self, channel_access_token: str, channel_secret: str):
+        if not channel_access_token or not channel_secret:
+            raise ValueError("LINE credentials missing (access token/secret).")
+        self.access_token = channel_access_token
+        self.secret = channel_secret
+        self.headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.access_token}",
+        }
 
-def _coerce_messages(msgs: Iterable[str] | str) -> list[dict]:
-    if isinstance(msgs, str):
-        msgs = [msgs]
-    result = []
-    for s in msgs:
-        text = (s or "").strip()
-        if not text:
-            continue
-        if len(text) > 4900:  # LINE จำกัดข้อความ ~5000 ตัว
-            text = text[:4900] + "\n…(truncated)"
-        result.append({"type": "text", "text": text})
-    return result or [{"type": "text", "text": "(empty)"}]
+    # -------------------------------------------------------------------------
+    # LAYER B) REPLY
+    # -------------------------------------------------------------------------
+    def reply_text(self, reply_token: str, text: str) -> Dict[str, Any]:
+        payload = {
+            "replyToken": reply_token,
+            "messages": [{"type": "text", "text": text}],
+        }
+        return self._post(LINE_REPLY_URL, payload)
 
-async def reply_text(reply_token: str, msgs: Iterable[str] | str) -> None:
-    messages = _coerce_messages(msgs)
-    await _reply(reply_token, messages)
+    # -------------------------------------------------------------------------
+    # LAYER C) PUSH
+    # -------------------------------------------------------------------------
+    def push_text(self, to: str, text: str) -> Dict[str, Any]:
+        payload = {
+            "to": to,
+            "messages": [{"type": "text", "text": text}],
+        }
+        return self._post(LINE_PUSH_URL, payload)
 
-async def push_text(user_id: str, msgs: Iterable[str] | str) -> None:
-    messages = _coerce_messages(msgs)
-    await _push(user_id, messages)
+    # -------------------------------------------------------------------------
+    # LAYER D) BROADCAST
+    # -------------------------------------------------------------------------
+    def broadcast_text(self, text: str) -> Dict[str, Any]:
+        payload = {
+            "messages": [{"type": "text", "text": text}],
+        }
+        return self._post(LINE_BROADCAST_URL, payload)
 
-async def broadcast_text(msgs: Iterable[str] | str) -> None:
-    messages = _coerce_messages(msgs)
-    await _broadcast(messages)
+    # -------------------------------------------------------------------------
+    # LAYER E) INTERNAL POST
+    # -------------------------------------------------------------------------
+    def _post(self, url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            r = requests.post(url, headers=self.headers, json=payload, timeout=10)
+            if r.status_code != 200:
+                log.error("LINE API error %s: %s", r.status_code, r.text)
+                return {"ok": False, "status": r.status_code, "body": r.text}
+            return {"ok": True, "status": r.status_code, "body": r.text}
+        except Exception as e:
+            log.exception("LINE API request failed: %s", e)
+            return {"ok": False, "error": str(e)}

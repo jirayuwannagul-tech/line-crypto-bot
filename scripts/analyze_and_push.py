@@ -1,49 +1,92 @@
+# scripts/analyze_and_push.py
+# =============================================================================
+# LAYER A) OVERVIEW
+# -----------------------------------------------------------------------------
+# ใช้เป็น CLI script:
+#   - ดึงข้อมูล (ผ่าน engine/service ภายในโปรเจ็กต์)
+#   - วิเคราะห์สัญญาณด้วยโปรไฟล์ (baseline/cholak/chinchot)
+#   - ส่งข้อความผลลัพธ์ไป LINE (push ถึง user/room/group หรือ broadcast)
+#
+# ตัวอย่างรัน:
+#   python scripts/analyze_and_push.py --symbol BTCUSDT --tf 1D --profile chinchot --to <USER_ID>
+#   python scripts/analyze_and_push.py --symbol ETHUSDT --tf 4H --broadcast
+#
+# ต้องตั้ง ENV:
+#   LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET
+#   (ถ้ามี historical.xlsx คนละที่: HISTORICAL_XLSX_PATH)
+# =============================================================================
 
-# วิเคราะห์ BTC แล้วส่งผลไป LINE (push)
-# ใช้ ENV: LINE_CHANNEL_ACCESS_TOKEN, LINE_USER_ID
-# ใช้: python scripts/analyze_and_push.py --symbol BTCUSDT --tf 1D
+from __future__ import annotations
+import os
+import sys
+import argparse
+import logging
 
+from app.services.signal_service import analyze_and_get_text
+from app.adapters.delivery_line import LineDelivery
 
-import os, argparse
-from app.analysis.timeframes import get_data
-from app.analysis.indicators import apply_indicators
-from app.analysis.dow import analyze_dow
-from app.analysis.elliott import analyze_elliott
-from app.analysis.scenarios import analyze_scenarios
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, PushMessageRequest, TextMessage
+log = logging.getLogger("analyze_and_push")
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
-def push_text(to: str, text: str):
-    token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
-    if not token: raise RuntimeError("ENV LINE_CHANNEL_ACCESS_TOKEN is empty")
-    cfg = Configuration(access_token=token)
-    with ApiClient(cfg) as api_client:
-        api = MessagingApi(api_client)
-        api.push_message(PushMessageRequest(to=to, messages=[TextMessage(text=text)]))
+# =============================================================================
+# LAYER B) ENV & CLIENT
+# -----------------------------------------------------------------------------
+def _env(name: str, default: str | None = None) -> str | None:
+    v = os.getenv(name, default)
+    return v if v not in (None, "") else default
 
-def main(symbol: str, tf: str, to: str):
-    df = get_data(symbol, tf)
-    d  = apply_indicators(df)
-    dow = analyze_dow(d)
-    ell = analyze_elliott(d); ell_targets = ell.get("targets", {})
-    sce = analyze_scenarios(d, symbol=symbol, tf=tf)
+def _build_line_client() -> LineDelivery:
+    access = _env("LINE_CHANNEL_ACCESS_TOKEN")
+    secret = _env("LINE_CHANNEL_SECRET")
+    if not access or not secret:
+        raise RuntimeError("Missing LINE credentials: set LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET")
+    return LineDelivery(access, secret)
 
-    msg = (
-        f"{symbol} {tf} (สรุป)\n"
-        f"• Dow: {dow.get('trend_primary')} / {dow.get('trend_secondary')} (conf {dow.get('confidence')})\n"
-        f"• Elliott: {ell.get('pattern')} → next {ell.get('next',{}).get('stage')} ({ell.get('next',{}).get('direction')})\n"
-        f"  เป้ารีเทรซ: "
-        f"{ell_targets.get('post_impulse_retrace_38.2%', '—')}–{ell_targets.get('post_impulse_retrace_61.8%', '—')}\n"
-        f"• Scenarios: ขึ้น {sce['percent']['up']}% / ลง {sce['percent']['down']}% / Side {sce['percent']['side']}%\n"
-        f"• Notes: {', '.join(sce.get('rationale', [])[:3])}"
-    )
-    push_text(to, msg)
+# =============================================================================
+# LAYER C) ARGPARSE (CLI)
+# -----------------------------------------------------------------------------
+def _build_argparser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description="Analyze signal and push/broadcast to LINE")
+    p.add_argument("--symbol", required=False, default="BTCUSDT", help="Symbol e.g. BTCUSDT")
+    p.add_argument("--tf", required=False, default="1D", help="Timeframe e.g. 1H/4H/1D")
+    p.add_argument("--profile", required=False, default=os.getenv("STRATEGY_PROFILE", "baseline"),
+                   help="Strategy profile: baseline | cholak | chinchot")
+    p.add_argument("--to", required=False, help="LINE userId/roomId/groupId for push")
+    p.add_argument("--broadcast", action="store_true", help="Broadcast instead of push")
+    p.add_argument("--xlsx", required=False, default=_env("HISTORICAL_XLSX_PATH"),
+                   help="Override path to historical.xlsx (optional)")
+    return p
+
+# =============================================================================
+# LAYER D) MAIN FLOW
+# -----------------------------------------------------------------------------
+def main() -> int:
+    args = _build_argparser().parse_args()
+
+    # 1) วิเคราะห์ และสร้างข้อความสรุป
+    cfg = {"profile": args.profile}
+    text = analyze_and_get_text(args.symbol, args.tf, profile=args.profile, cfg=cfg, xlsx_path=args.xlsx)
+
+    # 2) ส่ง LINE (push หรือ broadcast)
+    client = _build_line_client()
+    if args.broadcast:
+        log.info("Broadcasting: %s %s (profile=%s)", args.symbol, args.tf, args.profile)
+        resp = client.broadcast_text(text)
+    else:
+        to_id = args.to or _env("LINE_DEFAULT_TO")
+        if not to_id:
+            log.error("Missing --to and LINE_DEFAULT_TO")
+            print("ERROR: Missing --to and LINE_DEFAULT_TO", file=sys.stderr)
+            return 2
+        log.info("Pushing to %s: %s %s (profile=%s)", to_id, args.symbol, args.tf, args.profile)
+        resp = client.push_text(to_id, text)
+
+    if not resp.get("ok"):
+        log.error("LINE send failed: %s", resp)
+        return 1
+
+    log.info("Done.")
+    return 0
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--symbol", default="BTCUSDT")
-    ap.add_argument("--tf", default="1D")
-    ap.add_argument("--to", default=os.getenv("LINE_USER_ID",""))
-    args = ap.parse_args()
-    if not args.to:
-        raise RuntimeError("ต้องระบุ --to หรือเซ็ต ENV LINE_USER_ID")
-    main(args.symbol, args.tf, args.to)
+    raise SystemExit(main())

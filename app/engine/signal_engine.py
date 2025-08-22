@@ -1,251 +1,163 @@
 # app/engine/signal_engine.py
 # =============================================================================
-# Signal Engine (Mock Logic) — with Pylance‑friendly type hints
+# LAYER A) OVERVIEW
+# -----------------------------------------------------------------------------
+# อธิบาย:
+# - จุดศูนย์กลาง “รันเครื่องวิเคราะห์สัญญาณ” สำหรับงาน batch/cron หรือ webhook
+# - ลำดับงาน: get_data → suggest_trade (profile‑aware) → สร้าง payload สำหรับส่ง LINE
+# - คงความเข้ากันได้กับของเดิม โดยเพิ่มตัวเลือก profile แบบ optional
 # =============================================================================
 
 from __future__ import annotations
+from typing import Dict, Optional, Any
 
-import time
-from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Literal, List
+import os
+import traceback
 
-# ---- ใช้ DataFrame เป็นชนิดกลางสำหรับ type hints (fallback ได้) -------------
-try:
-    import pandas as pd  # runtime ใช้งานจริง
-    from pandas import DataFrame  # สำหรับ type hints
-except Exception:  # pragma: no cover
-    pd = None  # type: ignore
+import pandas as pd
 
-    class DataFrame:  # type: ignore
-        """Placeholder for typing when pandas is unavailable."""
-        pass
+from app.analysis.timeframes import get_data
+from app.analysis.entry_exit import suggest_trade, format_trade_text
 
-Side = Literal["NONE", "LONG", "SHORT"]
+# =============================================================================
+# LAYER B) CONFIG LOADING (SAFE DEFAULTS)
+# -----------------------------------------------------------------------------
+# อธิบาย:
+# - อ่าน ENV เล็กน้อยเพื่อให้รันได้ในทั้ง dev/prod โดยไม่พังถ้าไม่มีค่า
+# - profile: baseline | cholak | chinchot (ดีฟอลต์ baseline)
+# =============================================================================
 
-DEFAULT_CFG: Dict[str, Any] = {
-    "min_candles": 30,
-    "sma_fast": 10,
-    "sma_slow": 30,
-    "risk_pct": 0.01,
-    "rr": 1.5,
-    "cooldown_sec": 30,
-    "move_alerts": [0.01, 0.02],
-}
+def _env(name: str, default: Optional[str] = None) -> Optional[str]:
+    v = os.getenv(name, default)
+    return v if v is not None and v != "" else default
 
-@dataclass
-class Position:
-    side: Side = "NONE"
-    entry: Optional[float] = None
-    sl: Optional[float] = None
-    tp: Optional[float] = None
-    opened_ts: Optional[float] = None
+DEFAULT_PROFILE = _env("STRATEGY_PROFILE", "baseline")  # ใช้ถ้า caller ไม่ส่งมา
 
-@dataclass
-class SymbolState:
-    last_signal_ts: float = 0.0
-    position: Position = field(default_factory=Position)
-    last_alert_price: Optional[float] = None
+# =============================================================================
+# LAYER C) CORE ENGINE (SIMPLE FACADE)
+# -----------------------------------------------------------------------------
+# อธิบาย:
+# - ฟาซาดเรียบง่ายสำหรับสร้าง “สัญญาณ” หนึ่งชุดต่อ symbol/timeframe
+# - คืน dict สำหรับไปใช้ต่อ (เช่นใน Services/Router หรือ Jobs)
+# - ไม่ผูกกับ LINE โดยตรง ให้ส่วน caller ตัดสินใจว่าจะส่งอย่างไร
+# =============================================================================
 
 class SignalEngine:
-    def __init__(self, cfg: Optional[Dict[str, Any]] = None, use_ai: bool = False) -> None:
-        self.cfg: Dict[str, Any] = {**DEFAULT_CFG, **(cfg or {})}
-        self._states: Dict[str, SymbolState] = {}
-        self._use_ai: bool = bool(use_ai)
+    def __init__(self, *, xlsx_path: Optional[str] = None):
+        """
+        xlsx_path: ทางเลือก ถ้าต้อง override ไฟล์ historical.xlsx
+        """
+        self.xlsx_path = xlsx_path
 
-    def set_ai(self, enabled: bool) -> None:
-        self._use_ai = bool(enabled)
-
-    def reset_symbol(self, symbol: str) -> None:
-        self._states.pop(symbol, None)
-
-    def process_ohlcv(self, symbol: str, df: DataFrame, use_ai: Optional[bool] = None) -> Dict[str, Any]:
-        st = self._states.setdefault(symbol, SymbolState())
-        now = time.time()
-
-        if pd is None or df is None:
-            return self._pack(st, action="HOLD", side=st.position.side, price=None,
-                              reason="pandas_unavailable_or_df_missing", analysis={})
-
-        needed = {"open", "high", "low", "close"}
-        if not needed.issubset(getattr(df, "columns", [])):
-            return self._pack(st, action="HOLD", side=st.position.side, price=None,
-                              reason="invalid_df_columns", analysis={"columns": list(getattr(df, "columns", []))})
-
-        if len(df) < int(self.cfg["min_candles"]):
-            return self._pack(st, action="HOLD", side=st.position.side, price=None,
-                              reason="insufficient_candles", analysis={"rows": int(len(df))})
-
-        last_price = float(df["close"].iloc[-1])
-
-        ind_result: Dict[str, Any] = self._analyze_with_indicators(df)
-
-        use_ai_flag: bool = self._use_ai if use_ai is None else bool(use_ai)
-        ai_result: Dict[str, Any] = self._analyze_with_ai(ind_result) if use_ai_flag else {}
-
-        pre: Dict[str, Any] = self._combine_pre_signal(ind_result, ai_result, use_ai_flag)
-
-        if st.position.side != "NONE" and st.position.entry is not None:
-            hit, which = self._check_tp_sl(st.position, last_price)
-            if hit:
-                prev_side = st.position.side
-                self._close_position(st)
-                return self._pack(st, action="CLOSE", side=prev_side, price=last_price,
-                                  reason=f"exit_{which}", analysis={"pre_signal": pre, "ai_used": use_ai_flag})
-
-            alerts: List[str] = self._check_move_alerts(st, last_price)
-            if alerts:
-                return self._pack(st, action="ALERT", side=st.position.side, price=last_price,
-                                  reason="; ".join(alerts), analysis={"pre_signal": pre, "ai_used": use_ai_flag})
-
-            return self._pack(st, action="HOLD", side=st.position.side, price=last_price,
-                              reason="in_position_no_flip", analysis={"pre_signal": pre, "ai_used": use_ai_flag})
-
-        if now - st.last_signal_ts < float(self.cfg["cooldown_sec"]):
-            return self._pack(st, action="HOLD", side="NONE", price=last_price,
-                              reason="cooldown", analysis={"pre_signal": pre, "ai_used": use_ai_flag})
-
-        if pre.get("bias") == "long":
-            self._open_position(st, side="LONG", entry=last_price)
-            st.last_signal_ts = now
-            return self._pack(st, action="OPEN", side="LONG", price=last_price,
-                              reason="pre_signal_long", analysis={"pre_signal": pre, "ai_used": use_ai_flag})
-
-        if pre.get("bias") == "short":
-            self._open_position(st, side="SHORT", entry=last_price)
-            st.last_signal_ts = now
-            return self._pack(st, action="OPEN", side="SHORT", price=last_price,
-                              reason="pre_signal_short", analysis={"pre_signal": pre, "ai_used": use_ai_flag})
-
-        return self._pack(st, action="HOLD", side="NONE", price=last_price,
-                          reason="pre_signal_neutral", analysis={"pre_signal": pre, "ai_used": use_ai_flag})
-
-    # ---- Analysis (mock) ----------------------------------------------------
-
-    def _analyze_with_indicators(self, df: DataFrame) -> Dict[str, Any]:
-        close = df["close"]
-        open_ = df["open"]
-
-        last_close = float(close.iloc[-1])
-        prev_close = float(close.iloc[-2]) if len(close) >= 2 else last_close
-        last_open = float(open_.iloc[-1])
-
-        sma_fast = float(close.rolling(int(self.cfg["sma_fast"])).mean().iloc[-1])
-        sma_slow = float(close.rolling(int(self.cfg["sma_slow"])).mean().iloc[-1])
-
-        bias = "neutral"
-        if sma_fast > sma_slow and last_close >= last_open:
-            bias = "long"
-        elif sma_fast < sma_slow and last_close <= last_open:
-            bias = "short"
-
-        confidence = 0.6 if bias != "neutral" else 0.5
-
-        return {
-            "last_close": last_close,
-            "prev_close": prev_close,
-            "last_open": last_open,
-            "sma_fast": sma_fast,
-            "sma_slow": sma_slow,
-            "bias": bias,
-            "confidence": confidence,
-            "notes": "mock_indicators",
-        }
-
-    def _analyze_with_ai(self, indicator_result: Dict[str, Any]) -> Dict[str, Any]:
-        base_bias = indicator_result.get("bias", "neutral")
-        base_conf = float(indicator_result.get("confidence", 0.5))
-        ai_conf_boost = 0.1 if base_bias != "neutral" else 0.0
-        return {
-            "ai_bias_hint": base_bias,
-            "ai_confidence": min(1.0, base_conf + ai_conf_boost),
-            "ai_notes": "mock_ai_inference",
-        }
-
-    def _combine_pre_signal(self, ind_res: Dict[str, Any], ai_res: Dict[str, Any], ai_used: bool) -> Dict[str, Any]:
-        bias = ind_res.get("bias", "neutral")
-        conf = float(ind_res.get("confidence", 0.5))
-        if ai_used and ai_res:
-            conf = float(ai_res.get("ai_confidence", conf))
-        return {
-            "bias": bias,
-            "confidence": conf,
-            "sources": {"indicators": ind_res, "ai": ai_res if ai_used else None},
-            "strategy_id": "mock_momentum_breakout",
-        }
-
-    # ---- Position & Risk helpers -------------------------------------------
-
-    def _open_position(self, st: SymbolState, side: Side, entry: float) -> None:
-        risk_d = float(self.cfg["risk_pct"]) * entry
-        rr = float(self.cfg["rr"])
-        if side == "LONG":
-            sl = max(0.0, entry - risk_d)
-            tp = entry + rr * risk_d
-        elif side == "SHORT":
-            sl = entry + risk_d
-            tp = max(0.0, entry - rr * risk_d)
-        else:
-            sl = None
-            tp = None
-        st.position = Position(side=side, entry=entry, sl=sl, tp=tp, opened_ts=time.time())
-        st.last_alert_price = entry
-
-    def _close_position(self, st: SymbolState) -> None:
-        st.position = Position()
-        st.last_alert_price = None
-
-    def _check_tp_sl(self, pos: Position, price: float) -> tuple[bool, str]:
-        if pos.side == "LONG":
-            if pos.tp is not None and price >= pos.tp:
-                return True, "tp"
-            if pos.sl is not None and price <= pos.sl:
-                return True, "sl"
-        elif pos.side == "SHORT":
-            if pos.tp is not None and price <= pos.tp:
-                return True, "tp"
-            if pos.sl is not None and price >= pos.sl:
-                return True, "sl"
-        return False, ""
-
-    def _check_move_alerts(self, st: SymbolState, price: float) -> List[str]:
-        if st.last_alert_price is None or st.last_alert_price <= 0:
-            return []
-        base = st.last_alert_price
-        pct = (price - base) / base
-        alerts: List[str] = []
-        for th_raw in self.cfg.get("move_alerts", []):
-            th = float(th_raw)
-            if pct >= th:
-                alerts.append(f"moved +{int(th*100)}%")
-            elif pct <= -th:
-                alerts.append(f"moved -{int(th*100)}%")
-        if alerts:
-            st.last_alert_price = price
-        return alerts
-
-    def _pack(
+    # --- public API -----------------------------------------------------------
+    def analyze_symbol(
         self,
-        st: SymbolState,
-        action: Literal["OPEN", "HOLD", "CLOSE", "ALERT"],
-        side: Side,
-        price: Optional[float],
-        reason: str,
-        analysis: Dict[str, Any],
+        symbol: str,
+        tf: str,
+        *,
+        profile: Optional[str] = None,
+        cfg: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        pos = st.position
-        return {
-            "action": action,
-            "side": side,
-            "price": price,
-            "sl": pos.sl,
-            "tp": pos.tp,
-            "reason": reason,
-            "analysis": analysis,
-            "position": {
-                "side": pos.side,
-                "entry": pos.entry,
-                "sl": pos.sl,
-                "tp": pos.tp,
-                "opened_ts": pos.opened_ts,
-            },
+        """
+        วิเคราะห์สัญญาณหนึ่งชุดและคืน payload พร้อมข้อความสำหรับนำไปส่ง LINE
+
+        Returns
+        -------
+        {
+          "ok": bool,
+          "symbol": str,
+          "tf": str,
+          "profile": str,
+          "text": str,            # สรุปข้อความสั้น สำหรับ LINE
+          "trade": Dict,          # payload เต็มจาก suggest_trade()
+          "error": Optional[str], # ถ้า ok=False จะมีข้อความ error
         }
+        """
+        cfg = cfg or {}
+        use_profile = (profile or cfg.get("profile") or DEFAULT_PROFILE) or "baseline"
+
+        try:
+            # 1) ดึงข้อมูล OHLCV
+            df = get_data(symbol, tf, xlsx_path=self.xlsx_path)
+            if not isinstance(df, pd.DataFrame) or df.empty:
+                return {
+                    "ok": False,
+                    "symbol": symbol,
+                    "tf": tf,
+                    "profile": use_profile,
+                    "text": "",
+                    "trade": {},
+                    "error": "No data loaded for symbol/timeframe.",
+                }
+
+            # 2) วิเคราะห์ entry/exit (ภายในจะเรียก scenarios แบบ profile‑aware)
+            trade = suggest_trade(
+                df,
+                symbol=symbol,
+                tf=tf,
+                cfg={**cfg, "profile": use_profile},
+            )
+
+            # 3) สร้างข้อความสรุป (สำหรับ LINE หรือ log)
+            text = format_trade_text(trade)
+
+            return {
+                "ok": True,
+                "symbol": symbol,
+                "tf": tf,
+                "profile": use_profile,
+                "text": text,
+                "trade": trade,
+                "error": None,
+            }
+
+        except Exception as e:
+            return {
+                "ok": False,
+                "symbol": symbol,
+                "tf": tf,
+                "profile": use_profile,
+                "text": "",
+                "trade": {},
+                "error": f"{e.__class__.__name__}: {e}\n{traceback.format_exc()}",
+            }
+
+# =============================================================================
+# LAYER D) CONVENIENCE FUNCTIONS (BACKWARD‑COMPATIBLE)
+# -----------------------------------------------------------------------------
+# อธิบาย:
+# - เผื่อโค้ดเดิมเรียกใช้ฟังก์ชันแบบ procedural
+# - ทั้งสองฟังก์ชันด้านล่างเป็น wrapper รอบ SignalEngine.analyze_symbol()
+# =============================================================================
+
+def build_signal_payload(
+    symbol: str,
+    tf: str,
+    *,
+    profile: Optional[str] = None,
+    cfg: Optional[Dict[str, Any]] = None,
+    xlsx_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Wrapper ใช้งานง่าย: คืน payload เดียวกับ SignalEngine.analyze_symbol()
+    """
+    engine = SignalEngine(xlsx_path=xlsx_path)
+    return engine.analyze_symbol(symbol, tf, profile=profile, cfg=cfg)
+
+def build_line_text(
+    symbol: str,
+    tf: str,
+    *,
+    profile: Optional[str] = None,
+    cfg: Optional[Dict[str, Any]] = None,
+    xlsx_path: Optional[str] = None,
+) -> str:
+    """
+    คืนข้อความสรุป (string) อย่างเดียว — เหมาะสำหรับ push ผ่าน LINE ทันที
+    """
+    payload = build_signal_payload(symbol, tf, profile=profile, cfg=cfg, xlsx_path=xlsx_path)
+    if payload.get("ok"):
+        return payload.get("text", "")
+    # ถ้า error ให้สรุปสั้น ๆ (อย่าทิ้งเงียบ)
+    err = payload.get("error") or "unknown error"
+    return f"❗️Signal error: {err}"

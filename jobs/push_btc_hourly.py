@@ -1,42 +1,92 @@
 # jobs/push_btc_hourly.py
-import asyncio
-from datetime import datetime
+# =============================================================================
+# LAYER A) OVERVIEW
+# -----------------------------------------------------------------------------
+# ใช้เป็น job เรียกตามเวลา (เช่น cron/Render scheduler):
+# - วิเคราะห์สัญญาณด้วยโปรไฟล์ที่เลือก
+# - ส่งข้อความผลลัพธ์ไป LINE แบบ push (หรือ broadcast ได้ผ่าน ENV)
+#
+# ENV ที่เกี่ยวข้อง:
+#   LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET, LINE_DEFAULT_TO
+#   JOB_SYMBOL            (default: BTCUSDT)
+#   JOB_TF                (default: 1H)
+#   STRATEGY_PROFILE      (default: baseline)
+#   HISTORICAL_XLSX_PATH  (optional override)
+#   JOB_BROADCAST         (set "1" to broadcast แทน push)
+#
+# วิธีรัน (ตัวอย่าง):
+#   python -m jobs.push_btc_hourly
+#   # หรือ
+#   python jobs/push_btc_hourly.py
+# =============================================================================
 
-from app.analysis.timeframes import get_data
-from app.analysis.scenarios import analyze_scenarios
-from app.adapters.delivery_line import push_text  # ✅ ใช้ delivery_line ไม่ใช่ client
+from __future__ import annotations
+import os
+import sys
+import logging
 
-# 👉 ใส่ LINE USER_ID หรือ GROUP_ID ของคุณ
-LINE_TARGET = "Uc6abb9a104a3bc78e6627150c62fb962"
+from app.services.signal_service import analyze_and_get_text
+from app.adapters.delivery_line import LineDelivery
 
+log = logging.getLogger("jobs.push_btc_hourly")
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
-async def push_btc():
-    try:
-        # 1) โหลดข้อมูล 1H
-        df = get_data("BTCUSDT", "1H")
-        if df is None or df.empty:
-            raise RuntimeError("No data loaded for BTCUSDT 1H")
+# =============================================================================
+# LAYER B) ENV HELPERS
+# =============================================================================
+def _env(name: str, default: str | None = None) -> str | None:
+    v = os.getenv(name, default)
+    return v if v not in (None, "") else default
 
-        # 2) วิเคราะห์
-        result = analyze_scenarios(df, symbol="BTCUSDT", tf="1H")
+def _get_bool_env(name: str, default: bool = False) -> bool:
+    v = (_env(name, None) or "").strip().lower()
+    if v in ("1", "true", "yes", "y", "on"): return True
+    if v in ("0", "false", "no", "n", "off"): return False
+    return default
 
-        # 3) เตรียมข้อความ
-        msg = f"""
-📊 BTCUSDT (1H)
-⏰ {datetime.utcnow().strftime("%Y-%m-%d %H:%M")} UTC
-Up={result['percent']['up']}% | Down={result['percent']['down']}% | Side={result['percent']['side']}%
-EMA50={result['levels']['ema50']:.2f} | EMA200={result['levels']['ema200']:.2f}
-High={result['levels']['recent_high']:.2f} | Low={result['levels']['recent_low']:.2f}
-        """.strip()
+# =============================================================================
+# LAYER C) MAIN JOB LOGIC
+# =============================================================================
+def main() -> int:
+    # --- config จาก ENV (มีค่า default ที่ปลอดภัย)
+    symbol  = _env("JOB_SYMBOL", "BTCUSDT")
+    tf      = _env("JOB_TF", "1H")
+    profile = _env("STRATEGY_PROFILE", "baseline")
+    xlsx    = _env("HISTORICAL_XLSX_PATH", None)
+    do_broadcast = _get_bool_env("JOB_BROADCAST", False)
 
-        # 4) ส่งไป LINE
-        await push_text(LINE_TARGET, msg)
+    # --- สร้างข้อความสรุปจาก service (profile-aware)
+    cfg = {"profile": profile}
+    log.info("Analyzing %s %s with profile=%s", symbol, tf, profile)
+    text = analyze_and_get_text(symbol, tf, profile=profile, cfg=cfg, xlsx_path=xlsx)
 
-        print("[OK] pushed BTC report to LINE")
+    # --- สร้าง LINE client
+    access = _env("LINE_CHANNEL_ACCESS_TOKEN")
+    secret = _env("LINE_CHANNEL_SECRET")
+    if not access or not secret:
+        log.error("Missing LINE credentials (LINE_CHANNEL_ACCESS_TOKEN / LINE_CHANNEL_SECRET)")
+        return 2
+    client = LineDelivery(access, secret)
 
-    except Exception as e:
-        print("[ERROR]", e)
+    # --- ส่งข้อความ
+    if do_broadcast:
+        log.info("Broadcasting signal…")
+        resp = client.broadcast_text(text)
+    else:
+        to_id = _env("LINE_DEFAULT_TO")
+        if not to_id:
+            log.error("Missing LINE_DEFAULT_TO for push")
+            return 3
+        log.info("Pushing to %s …", to_id)
+        resp = client.push_text(to_id, text)
 
+    # --- ตรวจสอบผลส่ง
+    if not resp.get("ok"):
+        log.error("LINE send failed: %s", resp)
+        return 1
+
+    log.info("Job done.")
+    return 0
 
 if __name__ == "__main__":
-    asyncio.run(push_btc())
+    raise SystemExit(main())
