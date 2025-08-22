@@ -94,7 +94,7 @@ def _get_profile(tf: str, name: str = "baseline") -> Dict:
 
 def _atr_pct(df: pd.DataFrame, n: int = 14) -> Optional[float]:
     """ATR เป็นสัดส่วนของราคาปิดล่าสุด (ATR%)"""
-    import numpy as np
+    import numpy as np  # local import เพื่อเลี่ยง dependency ตอนทดสอบ
     if len(df) < n + 1:
         return None
     h, l, c = df["high"], df["low"], df["close"]
@@ -106,7 +106,7 @@ def _atr_pct(df: pd.DataFrame, n: int = 14) -> Optional[float]:
     return float(atr.iloc[-1] / last_close)
 
 # =============================================================================
-# LAYER C) CORE LOGIC (PROFILE‑AWARE ENTRY/EXIT)
+# LAYER C) CORE LOGIC (PROFILE-AWARE ENTRY/EXIT)
 # -----------------------------------------------------------------------------
 def suggest_trade(
     df: pd.DataFrame,
@@ -116,7 +116,7 @@ def suggest_trade(
     cfg: Optional[Dict] = None,
 ) -> Dict[str, object]:
     """
-    สร้างคำแนะนำจุดเข้า/TP/SL แบบ Elliott‑centric พร้อมคอนเฟิร์มด้วย EMA/RSI/ATR
+    สร้างคำแนะนำจุดเข้า/TP/SL แบบ Elliott-centric พร้อมคอนเฟิร์มด้วย EMA/RSI/ATR
     - ยึด payload จาก analyze_scenarios() แล้วปรับตามโปรไฟล์
     """
     cfg = cfg or {}
@@ -144,7 +144,6 @@ def suggest_trade(
     notes: List[str] = []
 
     if perc.get(direction, 0) < min_prob:
-        # ยังให้ผลลัพธ์ได้ แต่ระบุเหตุผลเพื่อใช้แจ้ง LINE
         notes.append(f"Confidence below threshold: {perc.get(direction, 0)}% < {min_prob}%")
 
     # 4) ดึงระดับสำคัญจาก scenarios (recent highs/lows, fib extensions, cluster)
@@ -158,9 +157,6 @@ def suggest_trade(
     fib_cluster = levels.get("fib_cluster")  # {"center":..., "members":[(key,price)], "spread_pct":...}
 
     # 5) เงื่อนไขคอนเฟิร์มตามโปรไฟล์
-    #    - RSI: up ต้อง >= rsi_bull_min; down ต้อง <= rsi_bear_max
-    #    - EMA: ถ้าโปรไฟล์บังคับ ให้โครงสร้างต้องตรงทิศ
-    #    - ATR: ต้องไม่น้อยกว่าเกณฑ์
     rsi_ok = True
     ema_ok = True
     atr_ok = True
@@ -177,7 +173,6 @@ def suggest_trade(
         rsi_ok = (not math.isnan(rsi14)) and (rsi14 <= rsi_bear_max)
         ema_ok = (close < ema200 and ema50 < ema200) if ema_required else True
     else:
-        # SIDE: ไม่แนะนำ Entry
         rsi_ok = ema_ok = False
 
     atr_ok = (atrp is not None) and (atrp >= atr_min_pct)
@@ -187,10 +182,9 @@ def suggest_trade(
     if profile_name == "chinchot" and direction in ("up", "down") and fib_cluster and "center" in fib_cluster:
         center = float(fib_cluster["center"])
         dist_pct = abs(close - center) / center if center else 1.0
-        tol = float(prof["fibo"]["cluster_tolerance"]) * 1.2  # ผ่อนคลายเล็กน้อยสำหรับ timing
+        tol = float(prof["fibo"]["cluster_tolerance"]) * 1.2
         if dist_pct <= tol:
             early_entry = True
-            # ผ่อนเกณฑ์ RSI นิดหน่อยในโหมด early
             if direction == "up" and not rsi_ok and rsi14 >= (rsi_bull_min - 2):
                 rsi_ok = True; notes.append("Early entry near Fibo cluster (RSI relaxed).")
             if direction == "down" and not rsi_ok and rsi14 <= (rsi_bear_max + 2):
@@ -216,7 +210,6 @@ def suggest_trade(
         sl = None
         notes.append("Market is SIDE (no entry suggested).")
     elif not confirm_ok:
-        # ไม่ผ่านคอนเฟิร์ม → แนะนำรอ แต่ยังคืน payload เพื่อให้ LINE แจ้งเหตุผลได้
         entry = None
         sl = None
         notes.append("Signal not confirmed; waiting.")
@@ -226,7 +219,7 @@ def suggest_trade(
             if direction == "up":
                 sl = entry * (1 - sl_pct)
                 tps = [entry * (1 + p) for p in tp_pcts]
-            else:  # "down"
+            else:
                 sl = entry * (1 + sl_pct)
                 tps = [entry * (1 - p) for p in tp_pcts]
             take_profits = {f"TP{i+1}": float(tp) for i, tp in enumerate(tps)}
@@ -253,7 +246,7 @@ def suggest_trade(
                 if not take_profits and recent_low is not None and recent_low < entry:
                     take_profits = {"TP1": float(recent_low)}
 
-    # 7) กรองตาม R:R ขั้นต่ำ (min_rr ของโปรไฟล์) — ถ้าไม่มี TP ใดผ่าน ให้คง payload และแจ้ง note
+    # 7) กรองตาม R:R ขั้นต่ำ (min_rr ของโปรไฟล์)
     min_rr = float(prof.get("min_rr", 0.0))
     if entry is not None and sl is not None and min_rr > 0 and take_profits:
         filtered: Dict[str, float] = {}
@@ -266,7 +259,7 @@ def suggest_trade(
         else:
             notes.append(f"No TP meets R:R ≥ {min_rr}")
 
-    # 8) ประกอบผลลัพธ์ (คงรูปแบบเดิม + เติม metadata เพิ่มเติม)
+    # 8) ผลลัพธ์
     return {
         "symbol": symbol,
         "tf": tf,

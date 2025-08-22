@@ -22,7 +22,6 @@
 
 from __future__ import annotations
 import os
-import sys
 import logging
 
 from app.services.signal_service import analyze_and_get_text
@@ -87,6 +86,7 @@ def main() -> int:
 
     log.info("Job done.")
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

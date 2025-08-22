@@ -4,7 +4,7 @@
 # -----------------------------------------------------------------------------
 # อธิบาย:
 # - จุดศูนย์กลาง “รันเครื่องวิเคราะห์สัญญาณ” สำหรับงาน batch/cron หรือ webhook
-# - ลำดับงาน: get_data → suggest_trade (profile‑aware) → สร้าง payload สำหรับส่ง LINE
+# - ลำดับงาน: get_data → suggest_trade (profile-aware) → สร้าง payload สำหรับส่ง LINE
 # - คงความเข้ากันได้กับของเดิม โดยเพิ่มตัวเลือก profile แบบ optional
 # =============================================================================
 
@@ -19,10 +19,11 @@ import pandas as pd
 from app.analysis.timeframes import get_data
 from app.analysis.entry_exit import suggest_trade, format_trade_text
 
+__all__ = ["SignalEngine", "build_signal_payload", "build_line_text"]
+
 # =============================================================================
 # LAYER B) CONFIG LOADING (SAFE DEFAULTS)
 # -----------------------------------------------------------------------------
-# อธิบาย:
 # - อ่าน ENV เล็กน้อยเพื่อให้รันได้ในทั้ง dev/prod โดยไม่พังถ้าไม่มีค่า
 # - profile: baseline | cholak | chinchot (ดีฟอลต์ baseline)
 # =============================================================================
@@ -36,7 +37,6 @@ DEFAULT_PROFILE = _env("STRATEGY_PROFILE", "baseline")  # ใช้ถ้า cal
 # =============================================================================
 # LAYER C) CORE ENGINE (SIMPLE FACADE)
 # -----------------------------------------------------------------------------
-# อธิบาย:
 # - ฟาซาดเรียบง่ายสำหรับสร้าง “สัญญาณ” หนึ่งชุดต่อ symbol/timeframe
 # - คืน dict สำหรับไปใช้ต่อ (เช่นใน Services/Router หรือ Jobs)
 # - ไม่ผูกกับ LINE โดยตรง ให้ส่วน caller ตัดสินใจว่าจะส่งอย่างไร
@@ -90,7 +90,7 @@ class SignalEngine:
                     "error": "No data loaded for symbol/timeframe.",
                 }
 
-            # 2) วิเคราะห์ entry/exit (ภายในจะเรียก scenarios แบบ profile‑aware)
+            # 2) วิเคราะห์ entry/exit (ภายในจะเรียก scenarios แบบ profile-aware)
             trade = suggest_trade(
                 df,
                 symbol=symbol,
@@ -123,11 +123,10 @@ class SignalEngine:
             }
 
 # =============================================================================
-# LAYER D) CONVENIENCE FUNCTIONS (BACKWARD‑COMPATIBLE)
+# LAYER D) CONVENIENCE FUNCTIONS (BACKWARD-COMPATIBLE)
 # -----------------------------------------------------------------------------
-# อธิบาย:
 # - เผื่อโค้ดเดิมเรียกใช้ฟังก์ชันแบบ procedural
-# - ทั้งสองฟังก์ชันด้านล่างเป็น wrapper รอบ SignalEngine.analyze_symbol()
+# - เป็น wrapper รอบ SignalEngine.analyze_symbol()
 # =============================================================================
 
 def build_signal_payload(
