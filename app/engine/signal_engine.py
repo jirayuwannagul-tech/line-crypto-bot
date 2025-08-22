@@ -125,7 +125,7 @@ class SignalEngine:
 
             # 3) Compose short text (ของเดิม)
             base_text = format_trade_text(trade)
-
+            base_text = base_text.replace("ℹ️ เหตุผล:", "").strip()
             # 4) Append เหตุผล + % ขึ้นลง
             reasons_text = _build_reasons_text(df)
             text = f"{base_text}\n\n{reasons_text}"
