@@ -1,23 +1,28 @@
 # tests/test_elliott.py
-import pytest
 import pandas as pd
-from app.analysis.elliott import analyze_elliott
+import pytest
+from app.analysis import elliott
 
-def _zigzag_df():
-    # fake zigzag: 100→200 (A), 200→150 (B), 150→250 (C)
-    ts = pd.date_range("2024-01-01", periods=6, freq="D")
-    df = pd.DataFrame({
-        "timestamp": ts,
-        "open": [100,200,150,250,240,245],
-        "high": [200,210,160,255,245,250],
-        "low":  [ 95,195,145,240,235,240],
-        "close":[200,150,250,245,246,247],
-        "volume": 1000,
-    })
-    return df
+def test_analyze_elliott_basic():
+    # mock ข้อมูลราคา
+    data = {
+        "open":  [100, 102, 105, 103, 108, 110, 107, 111],
+        "high":  [102, 106, 107, 109, 112, 113, 111, 114],
+        "low":   [99, 101, 103, 102, 106, 108, 106, 110],
+        "close": [101, 105, 104, 108, 110, 109, 111, 113],
+    }
+    df = pd.DataFrame(data)
 
-def test_elliott_basic():
-    df = _zigzag_df()
-    res = analyze_elliott(df)
-    assert "pattern" in res
-    assert res["pattern"] in ("IMPULSE","ZIGZAG","FLAT","TRIANGLE","UNKNOWN")
+    result = elliott.analyze_elliott(df)
+
+    # --- check structure ---
+    assert isinstance(result, dict)
+    for key in ["pattern", "completed", "current", "next", "targets"]:
+        assert key in result
+
+    # --- check data types ---
+    assert isinstance(result["pattern"], str)
+    assert isinstance(result["completed"], bool)
+    assert isinstance(result["current"], dict)
+    assert isinstance(result["next"], dict)
+    assert isinstance(result["targets"], dict)
