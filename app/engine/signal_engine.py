@@ -160,3 +160,76 @@ def build_line_text(
     # ถ้า error ให้สรุปสั้น ๆ (อย่าทิ้งเงียบ)
     err = payload.get("error") or "unknown error"
     return f"❗️Signal error: {err}"
+# app/engine/signal_engine.py
+# =============================================================================
+# SIGNAL ENGINE FACADE
+# =============================================================================
+
+from __future__ import annotations
+from typing import Dict, Optional, Any
+import os, traceback
+import pandas as pd
+
+from app.analysis.timeframes import get_data
+from app.analysis.entry_exit import suggest_trade, format_trade_text
+
+__all__ = ["SignalEngine", "build_signal_payload", "build_line_text"]
+
+def _env(name: str, default: Optional[str] = None) -> Optional[str]:
+    v = os.getenv(name, default)
+    return v if v is not None and v != "" else default
+
+DEFAULT_PROFILE = _env("STRATEGY_PROFILE", "baseline")
+
+class SignalEngine:
+    def __init__(self, *, xlsx_path: Optional[str] = None):
+        self.xlsx_path = xlsx_path
+
+    def analyze_symbol(
+        self,
+        symbol: str,
+        tf: str,
+        *,
+        profile: Optional[str] = None,
+        cfg: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        cfg = cfg or {}
+        use_profile = (profile or cfg.get("profile") or DEFAULT_PROFILE) or "baseline"
+
+        try:
+            df = get_data(symbol, tf, xlsx_path=self.xlsx_path)
+            if not isinstance(df, pd.DataFrame) or df.empty:
+                return {
+                    "ok": False, "symbol": symbol, "tf": tf,
+                    "profile": use_profile, "text": "",
+                    "trade": {}, "error": "No data loaded for symbol/timeframe."
+                }
+
+            trade = suggest_trade(df, symbol=symbol, tf=tf, cfg={**cfg, "profile": use_profile})
+            text = format_trade_text(trade)
+
+            return {"ok": True, "symbol": symbol, "tf": tf,
+                    "profile": use_profile, "text": text,
+                    "trade": trade, "error": None}
+
+        except Exception as e:
+            return {"ok": False, "symbol": symbol, "tf": tf,
+                    "profile": use_profile, "text": "",
+                    "trade": {}, "error": f"{e.__class__.__name__}: {e}\n{traceback.format_exc()}"}
+
+def build_signal_payload(symbol: str, tf: str,
+                         *, profile: Optional[str] = None,
+                         cfg: Optional[Dict[str, Any]] = None,
+                         xlsx_path: Optional[str] = None) -> Dict[str, Any]:
+    engine = SignalEngine(xlsx_path=xlsx_path)
+    return engine.analyze_symbol(symbol, tf, profile=profile, cfg=cfg)
+
+def build_line_text(symbol: str, tf: str,
+                    *, profile: Optional[str] = None,
+                    cfg: Optional[Dict[str, Any]] = None,
+                    xlsx_path: Optional[str] = None) -> str:
+    payload = build_signal_payload(symbol, tf, profile=profile, cfg=cfg, xlsx_path=xlsx_path)
+    if payload.get("ok"):
+        return payload.get("text", "")
+    err = payload.get("error") or "unknown error"
+    return f"❗️Signal error: {err}"
