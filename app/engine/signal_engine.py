@@ -28,21 +28,20 @@ def _env(name: str, default: Optional[str] = None) -> Optional[str]:
     v = os.getenv(name, default)
     return v if v is not None and v != "" else default
 
-DEFAULT_PROFILE = _env("STRATEGY_PROFILE", "baseline")  # fallback ถ้า caller ไม่ส่งมา
+DEFAULT_PROFILE = _env("STRATEGY_PROFILE", "baseline")
 
-# ค่าตั้งต้นสำหรับเอนจิน
 DEFAULT_CFG: Dict[str, Any] = {
     "min_candles": 30,
     "sma_fast": 10,
     "sma_slow": 30,
     "cooldown_sec": 0,
-    "risk_pct": 0.01,   # 1% stop
-    "rr": 1.5,          # take-profit = risk_pct * rr
-    "move_alerts": [],  # เช่น [0.01, 0.02]
+    "risk_pct": 0.01,
+    "rr": 1.5,
+    "move_alerts": [],
 }
 
 # -----------------------------------------------------------------------------
-# Helper: สร้างเหตุผลและ % แนวโน้ม (ใช้กับ build_line_text/analyze_symbol)
+# Helper: สร้างเหตุผลและ % แนวโน้ม
 # -----------------------------------------------------------------------------
 def _build_reasons_text(df: pd.DataFrame) -> str:
     rsi_val = indicators.rsi(df["close"], period=14).iloc[-1]
@@ -54,7 +53,6 @@ def _build_reasons_text(df: pd.DataFrame) -> str:
     reasons: List[str] = []
     score_up, score_down = 0.0, 0.0
 
-    # RSI
     if rsi_val < 45:
         reasons.append(f"RSI={rsi_val:.2f} → ใกล้ Oversold")
         score_up += 1
@@ -68,7 +66,6 @@ def _build_reasons_text(df: pd.DataFrame) -> str:
         else:
             score_down += 0.5
 
-    # EMA (ให้น้ำหนักมากกว่า RSI)
     if ema20 > ema50:
         reasons.append("EMA20 > EMA50 → แนวโน้มขาขึ้นสั้น")
         score_up += 1.5
@@ -76,7 +73,6 @@ def _build_reasons_text(df: pd.DataFrame) -> str:
         reasons.append("EMA20 < EMA50 → แนวโน้มอ่อนตัว")
         score_down += 1.5
 
-    # MACD
     if macd_val > signal_val:
         reasons.append("MACD > Signal → โมเมนตัมเริ่มบวก")
         score_up += 1
@@ -97,14 +93,6 @@ def _build_reasons_text(df: pd.DataFrame) -> str:
 # -----------------------------------------------------------------------------
 class SignalEngine:
     def __init__(self, cfg: Optional[Dict[str, Any]] = None, *, xlsx_path: Optional[str] = None, **kwargs):
-        """
-        รองรับทั้ง:
-          - ส่ง dict ผ่าน cfg (รูปแบบที่ tests ใช้): SignalEngine(cfg={...})
-          - ส่งคีย์เดี่ยว ๆ ผ่าน kwargs: SignalEngine(min_candles=50, sma_fast=10, ...)
-        kwargs จะ override cfg; ทั้งหมดถูก merge เข้ากับ DEFAULT_CFG
-
-        xlsx_path: override เส้นทางไฟล์ historical.xlsx ได้ถ้าต้องการ
-        """
         base = dict(DEFAULT_CFG)
         if cfg:
             base.update(cfg)
@@ -114,14 +102,10 @@ class SignalEngine:
         self.cfg: Dict[str, Any] = base
         self.xlsx_path = xlsx_path
 
-        # map เป็นแอตทริบิวต์เพื่อความสะดวก / compat
         for k, v in base.items():
             setattr(self, k, v)
 
-        # สถานะต่อสัญลักษณ์
-        # _pos: {symbol: {side, entry, tp, sl, anchor}}
         self._pos: Dict[str, Dict[str, Any]] = {}
-        # _states: {symbol: SimpleNamespace(last_signal_ts=float, last_alert_price=float)}
         self._states: Dict[str, SimpleNamespace] = {}
 
     def _ensure_state(self, symbol: str) -> SimpleNamespace:
@@ -142,24 +126,7 @@ class SignalEngine:
             "anchor": pos.get("anchor"),
         }
 
-    # ===== method ที่เทสเรียกใช้ =====
     def process_ohlcv(self, symbol: str, df: pd.DataFrame, *, use_ai: bool = False) -> Dict[str, Any]:
-        """
-        ประมวลผลสัญญาณจาก DataFrame ที่ caller เตรียมให้
-        Expected df columns: ['open','high','low','close']
-        Behavior ให้ตรงกับ tests:
-          - น้อยกว่า min_candles → HOLD (reason=insufficient_candles)
-          - ไม่มีสถานะ และ SMA_fast > SMA_slow และแท่งล่าสุดเขียว และไม่ติด cooldown → OPEN LONG
-          - มีสถานะ LONG:
-              - CLOSE เมื่อแตะ TP/SL (ไม่ flip)
-              - ไม่ถึง TP/SL → HOLD (reason=in_position_no_flip)
-          - รองรับ move_alerts: ยิง alerts และอัปเดต anchor
-          - คืน analysis.pre_signal.confidence เสมอ
-          - คืน position เสมอ (ถ้าไม่มี → side=NONE)
-          - บน OPEN ต้องมีคีย์ระดับบน: tp, sl
-          - มี _states[symbol].last_alert_price และอัปเดตเมื่อเปิด/เกิด move alert
-        """
-        # analysis.pre_signal.confidence
         if len(df) > 0:
             close = df["close"].iloc[-1]
             open_ = df["open"].iloc[-1]
@@ -191,12 +158,10 @@ class SignalEngine:
             "position": self._position_dict(pos),
         }
 
-        # 0) ตรวจจำนวนแท่งข้อมูล
         if len(df) < int(self.cfg["min_candles"]):
             out["reason"] = "insufficient_candles"
             return out
 
-        # 1) SMA และเขียว/แดงของแท่งล่าสุด
         fast_n = int(self.cfg["sma_fast"])
         slow_n = int(self.cfg["sma_slow"])
         sma_fast = df["close"].rolling(window=fast_n).mean().iloc[-1]
@@ -204,7 +169,6 @@ class SignalEngine:
 
         st = self._ensure_state(symbol)
 
-        # 2) ถ้ามีสถานะ LONG อยู่แล้ว → ตรวจ TP/SL และ move_alerts
         if pos and pos.get("side") == "LONG":
             entry = float(pos["entry"])
             tp = float(pos["tp"])
@@ -212,7 +176,6 @@ class SignalEngine:
             anchor = float(pos.get("anchor", entry))
             cur = float(df["close"].iloc[-1])
 
-            # move alerts
             alerts: List[str] = []
             for th in sorted(self.cfg.get("move_alerts", [])):
                 if th and th > 0 and cur >= anchor * (1 + th):
@@ -221,10 +184,9 @@ class SignalEngine:
             if alerts:
                 out["alerts"] = alerts
                 pos["anchor"] = anchor
-                st.last_alert_price = anchor  # อัปเดต state
+                st.last_alert_price = anchor
                 out["position"] = self._position_dict(pos)
 
-            # TP / SL
             if cur >= tp:
                 pnl = (cur - entry) / entry
                 closed_pos = self._position_dict(pos)
@@ -232,7 +194,7 @@ class SignalEngine:
                 out.update({
                     "action": "CLOSE",
                     "side": "LONG",
-                    "reason": "take_profit",
+                    "reason": "exit_tp",
                     "pnl": pnl,
                     "position": closed_pos,
                 })
@@ -244,13 +206,12 @@ class SignalEngine:
                 out.update({
                     "action": "CLOSE",
                     "side": "LONG",
-                    "reason": "stop_loss",
+                    "reason": "exit_sl",
                     "pnl": pnl,
                     "position": closed_pos,
                 })
                 return out
 
-            # ไม่ถึง TP/SL → HOLD ไม่ flip
             out.update({
                 "action": "HOLD",
                 "side": "LONG",
@@ -259,14 +220,12 @@ class SignalEngine:
             })
             return out
 
-        # 3) ยังไม่มีสถานะ → พิจารณาเปิด LONG (เช็ก cooldown ก่อน)
         now = time.time()
         cooldown = float(self.cfg.get("cooldown_sec", 0) or 0)
         if cooldown > 0 and (now - (st.last_signal_ts or 0)) < cooldown:
             out.update({"reason": "cooldown"})
             return out
 
-        # เงื่อนไขเปิด: fast > slow และแท่งล่าสุดเขียว
         cur_close = float(df["close"].iloc[-1])
         cur_open = float(df["open"].iloc[-1])
         if sma_fast > sma_slow and cur_close > cur_open:
@@ -284,24 +243,21 @@ class SignalEngine:
             }
             self._pos[symbol] = new_pos
             st.last_signal_ts = now
-            st.last_alert_price = entry  # ตั้ง anchor เริ่มต้นสำหรับ state
+            st.last_alert_price = entry
 
             out.update({
                 "action": "OPEN",
                 "side": "LONG",
                 "reason": "new_long",
                 "position": self._position_dict(new_pos),
-                # >>> คีย์ระดับบนที่เทสต้องการ
                 "tp": tp,
                 "sl": sl,
             })
             return out
 
-        # ไม่เข้าเงื่อนไขเปิด
         out.update({"reason": "no_setup"})
         return out
 
-    # ===== วิเคราะห์ด้วย data loader ภายใน และ compose ข้อความสำหรับ LINE =====
     def analyze_symbol(
         self,
         symbol: str,
@@ -310,10 +266,6 @@ class SignalEngine:
         profile: Optional[str] = None,
         cfg: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """
-        วิเคราะห์สัญญาณหนึ่งชุดและคืน payload พร้อมข้อความสำหรับส่ง LINE
-        """
-        # merge cfg ที่ส่งมาระดับเมธอดกับ cfg ของเอนจิน
         runtime_cfg = dict(self.cfg)
         if cfg:
             runtime_cfg.update(cfg)
@@ -321,7 +273,6 @@ class SignalEngine:
         use_profile = (profile or runtime_cfg.get("profile") or DEFAULT_PROFILE) or "baseline"
 
         try:
-            # 1) Load OHLCV
             df = get_data(symbol, tf, xlsx_path=self.xlsx_path)
             if not isinstance(df, pd.DataFrame) or df.empty:
                 return {
@@ -334,7 +285,6 @@ class SignalEngine:
                     "error": "No data loaded for symbol/timeframe.",
                 }
 
-            # 2) Build trade suggestion
             trade = suggest_trade(
                 df,
                 symbol=symbol,
@@ -342,11 +292,9 @@ class SignalEngine:
                 cfg={**runtime_cfg, "profile": use_profile},
             )
 
-            # 3) Compose short text (ของเดิม)
             base_text = format_trade_text(trade)
             base_text = base_text.replace("ℹ️ เหตุผล:", "").strip()
 
-            # 4) Append เหตุผล + % ขึ้นลง
             reasons_text = _build_reasons_text(df)
             text = f"{base_text}\n\n{reasons_text}"
 
@@ -372,7 +320,7 @@ class SignalEngine:
             }
 
 # -----------------------------------------------------------------------------
-# Convenience wrappers (backward-compatible)
+# Convenience wrappers
 # -----------------------------------------------------------------------------
 def build_signal_payload(
     symbol: str,
