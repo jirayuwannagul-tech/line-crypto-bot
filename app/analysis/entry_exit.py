@@ -63,7 +63,7 @@ _DEFAULTS = {
     },
     "fibo": {
         "retr": [0.382, 0.5, 0.618],
-        "ext": [1.272, 1.618],
+        "ext": [1.272, 1.618, 2.0],
         "cluster_tolerance": 0.0035,
     },
 }
@@ -109,7 +109,7 @@ def _atr_pct(df: pd.DataFrame, n: int = 14) -> Optional[float]:
 # LAYER C) CORE LOGIC (PROFILE-AWARE ENTRY/EXIT)
 # -----------------------------------------------------------------------------
 def suggest_trade(
-    df: pd.DataFrame,
+    df: Optional[pd.DataFrame],
     *,
     symbol: str = "BTCUSDT",
     tf: str = "1D",
@@ -120,6 +120,20 @@ def suggest_trade(
     - ยึด payload จาก analyze_scenarios() แล้วปรับตามโปรไฟล์
     """
     cfg = cfg or {}
+
+    # --- Patch 1: auto-load df if not provided ---
+    if df is None:
+        try:
+            # ใช้ relative import ให้สอดคล้องกับโครงสร้างแพ็กเกจ
+            from .timeframes import get_data
+        except Exception:
+            # fallback absolute import กรณีสคริปต์ถูกรันแบบแยก
+            from app.analysis.timeframes import get_data  # type: ignore
+        xlsx_path = cfg.get("xlsx_path") if isinstance(cfg, dict) else None
+        try:
+            df = get_data(symbol, tf, xlsx_path=xlsx_path)
+        except Exception as e:
+            raise RuntimeError(f"cannot load dataframe for {symbol} {tf}: {e}")
 
     # 0) โหลดโปรไฟล์ (ปลอดภัยแม้ไม่มี YAML)
     profile_name = str(cfg.get("profile", "baseline"))
