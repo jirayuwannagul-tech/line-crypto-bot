@@ -1,42 +1,52 @@
 import sys, os
 import pandas as pd
 
-# ✅ แก้ path ให้หา app เจอ ไม่ว่ารันจากไหน
+# ✅ set path
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-
 from app.analysis import dow
 
 
 def run_dow_backtest():
-    # โหลด historical data
     df = pd.read_excel("app/data/historical.xlsx")
+    results = []
 
-    # ตรวจว่ามีฟังก์ชันอะไรใน dow.py
-    try:
-        swings = dow.detect_swings(df)
-    except AttributeError:
-        if hasattr(dow, "analyze_dow"):
-            swings = dow.analyze_dow(df)
+    for i in range(50, len(df)):
+        sub_df = df.iloc[:i].copy()
+
+        try:
+            swings = dow.detect_swings(sub_df)
+        except AttributeError:
+            swings = (
+                dow.analyze_dow(sub_df)
+                if hasattr(dow, "analyze_dow")
+                else {}
+            )
+
+        trend_pred = swings.get("trend_primary", None)
+
+        # เทียบกับราคาจริงแท่งถัดไป
+        if i + 1 < len(df):
+            real_trend = (
+                "UP"
+                if df["Close"].iloc[i + 1] > df["Close"].iloc[i]
+                else "DOWN"
+            )
         else:
-            raise RuntimeError("❌ dow.py ไม่มีฟังก์ชัน detect_swings หรือ analyze_dow")
+            real_trend = None
 
-    print("=== สัญญาณจาก Dow (Swing High/Low) ===")
+        results.append({
+            "date": df.index[i] if hasattr(df, "index") else i,
+            "close": df["Close"].iloc[i],
+            "trend_pred": trend_pred,
+            "real_trend": real_trend,
+            "hit": 1 if trend_pred == real_trend else 0
+        })
 
-    # แสดงผลลัพธ์ที่ได้
-    if isinstance(swings, dict):
-        for k, v in swings.items():
-            print(f"\n[{k}]")
-            if isinstance(v, list):
-                print("จำนวน:", len(v))
-                print("ตัวอย่าง:", v[:5])
-            elif hasattr(v, "head"):
-                print("DataFrame/Series:")
-                print(v.head())
-            else:
-                print("ค่า:", v)
-    else:
-        print("ไม่ใช่ dict:", type(swings))
-        print(swings.head(20) if hasattr(swings, "head") else swings)
+    bt = pd.DataFrame(results)
+    bt.to_csv("backtest/results_dow.csv", index=False, encoding="utf-8-sig")
+
+    print("✅ Backtest saved: backtest/results_dow.csv")
+    print(bt.tail(10))
 
 
 if __name__ == "__main__":
