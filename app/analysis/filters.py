@@ -12,6 +12,9 @@
 #     session_filter(ts_ms, allowed="24/7") -> bool
 #     volume_filter(series, min_multiple_of_avg=1.0, lookback=20) -> bool
 # - เพิ่ม helper: evaluate_filters(series, cfg=None) -> dict  (ไม่บังคับใช้)
+# - เพิ่มฟังก์ชันระบุภาวะ SIDEWAY และคะแนนความมั่นใจ:
+#     is_sideway_df(df, ...) -> pd.Series[bool]
+#     side_confidence(row, ...) -> 0..100
 # =============================================================================
 
 from __future__ import annotations
@@ -45,6 +48,7 @@ def _to_df(series: Series):
         df[c] = pd.to_numeric(df.get(c), errors="coerce")
     if "ts" in df.columns:
         df = df.sort_values("ts")
+        df = df.set_index("ts", drop=False)  # เก็บ ts ไว้เป็น index เพื่อ join ภายนอกได้สะดวก
     return df.dropna(subset=["open","high","low","close"])
 
 def _ema(s, n: int):
@@ -55,7 +59,6 @@ def _ema(s, n: int):
 def _atr_pct(df, n: int = 14) -> Optional[float]:
     """คำนวณ ATR เป็นสัดส่วนของราคาปิดล่าสุด (ATR%); ถ้าข้อมูลไม่พอ คืน None"""
     import pandas as pd
-    import numpy as np
     if len(df) < n + 1:
         return None
     h, l, c = df["high"], df["low"], df["close"]
@@ -77,6 +80,20 @@ def _vol_ma_and_ratio(df, lookback: int = 20) -> Tuple[Optional[float], Optional
     if ma is None or math.isnan(ma) or ma == 0:
         return None, None
     return float(ma), float(last / ma)
+
+# --- เพิ่ม utils สำหรับ sideway detection ---
+def _roc_pct(df, window: int = 14):
+    """Return Series ของ %การเปลี่ยนแปลงเทียบ N แท่งก่อนหน้า"""
+    return df["close"].pct_change(window) * 100.0
+
+def _atr_pct_series(df, n: int = 14):
+    """Return Series ATR% (ใช้กับ is_sideway_df)"""
+    import pandas as pd
+    h, l, c = df["high"], df["low"], df["close"]
+    tr = pd.concat([(h - l).abs(), (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
+    atr = tr.ewm(alpha=1/n, adjust=False).mean()
+    atr_pct = (atr / c) * 100.0
+    return atr_pct
 
 # =============================================================================
 # LAYER C) CORE FILTERS (BACKWARD-COMPATIBLE API)
@@ -146,6 +163,77 @@ def volume_filter(series: Series, min_multiple_of_avg: float = 1.0, lookback: in
     return ratio >= k
 
 # =============================================================================
+# LAYER C2) SIDEWAY DETECTION & CONFIDENCE (ใหม่)
+# -----------------------------------------------------------------------------
+# อธิบาย:
+# - เกณฑ์ SIDEWAY มาจากการผสาน ADX/ATR%/ROC%
+# - ใช้ค่านิยมเริ่มต้นที่ค่อนข้าง “ผ่อน” เพื่อหลุดจากการติด SIDE ตลอด
+# - สามารถ override ค่าพวกนี้ผ่าน cfg ฝั่ง strategies ได้
+# =============================================================================
+
+def is_sideway_df(
+    df,
+    *,
+    adx_col: str = "ADX14",
+    atr_period: int = 14,
+    roc_window: int = 14,
+    adx_thresh: float = 14.0,
+    atrpct_thresh: float = 1.2,   # ATR% < 1.2% ถือว่านิ่ง
+    roc_thresh: float = 1.0,      # ROC14 |%| < 1.0%
+):
+    """
+    คืนค่า Series[bool] ว่าแท่งนั้นๆ เป็นภาวะ SIDEWAY หรือไม่
+    เกณฑ์: ADX ต่ำ, ATR% ต่ำ, ROC% แคบ (AND)
+    หมายเหตุ: ถ้าไม่มีคอลัมน์ ADX14/EMA20/ฯลฯ ให้เงื่อนไขนั้นไม่ผ่านโดยอัตโนมัติ (ลด false-sideway)
+    """
+    import pandas as pd
+    # ADX เงื่อนไข
+    if adx_col in df.columns:
+        adx_ok = df[adx_col] < adx_thresh
+    else:
+        adx_ok = pd.Series(False, index=df.index)
+
+    # ATR% เงื่อนไข
+    atr_pct_ser = _atr_pct_series(df, n=atr_period)
+    atr_ok = atr_pct_ser < atrpct_thresh
+
+    # ROC เงื่อนไข
+    roc = _roc_pct(df, window=roc_window)
+    roc_ok = roc.abs() < roc_thresh
+
+    side = adx_ok & atr_ok & roc_ok
+    return side
+
+def side_confidence(row, *, adx_thresh=14.0, atrpct_thresh=1.2, roc_thresh=1.0, atr_col="ATR14"):
+    """
+    ให้คะแนนความมั่นใจว่า 'SIDE' มากน้อยแค่ไหน (0–100)
+    ใช้จำนวนเงื่อนไขที่เข้าเกณฑ์มา map เป็นสเกลง่ายๆ
+    """
+    cnt = 0
+    # ADX
+    if "ADX14" in row and row["ADX14"] is not None and not math.isnan(row["ADX14"]):
+        if row["ADX14"] < adx_thresh:
+            cnt += 1
+    # ATR%
+    atr = row.get(atr_col, None)
+    if atr is not None and "close" in row and row["close"]:
+        atr_pct = (atr / row["close"]) * 100.0
+        if atr_pct < atrpct_thresh:
+            cnt += 1
+    # ROC14 (ถ้าไม่มี ใช้การเบี่ยงเบนจาก EMA20 แทน)
+    roc_ok = False
+    if "ROC14" in row and row["ROC14"] is not None and not math.isnan(row["ROC14"]):
+        roc_ok = abs(row["ROC14"]) < roc_thresh
+    elif "EMA20" in row and "close" in row and row["EMA20"] and row["close"]:
+        dev = abs((row["close"] - row["EMA20"]) / row["close"] * 100.0)
+        roc_ok = dev < roc_thresh
+    if roc_ok:
+        cnt += 1
+
+    # map เป็นสเกล
+    return {0: 15, 1: 40, 2: 65, 3: 85}.get(cnt, 30)
+
+# =============================================================================
 # LAYER D) HIGH-LEVEL AGGREGATION (OPTIONAL)
 # -----------------------------------------------------------------------------
 # อธิบาย:
@@ -162,6 +250,7 @@ def evaluate_filters(series: Series, *, cfg: Optional[Dict[str, Any]] = None) ->
         "volatility": {"pass": bool, "atr_pct": float, "threshold": float},
         "volume": {"pass": bool, "ratio": float, "threshold": float, "lookback": int},
         "session": {"pass": bool, "allowed": "24/7"},
+        "sideway": {"mask": List[bool], "params": {...}},
         "all_pass": bool
       }
     """
@@ -199,6 +288,32 @@ def evaluate_filters(series: Series, *, cfg: Optional[Dict[str, Any]] = None) ->
     sess_allowed = cfg.get("session_allowed", "24/7")
     sess_pass = (sess_allowed == "24/7")
     out["session"] = {"pass": sess_pass, "allowed": sess_allowed}
+
+    # --- Sideway mask (สำหรับ debug/report)
+    adx_thresh = float(cfg.get("side_adx_thresh", 14.0))
+    atrpct_thresh = float(cfg.get("side_atr_pct_thresh", 1.2))
+    roc_thresh = float(cfg.get("side_roc_thresh", 1.0))
+    atr_period = int(cfg.get("side_atr_period", 14))
+    roc_window = int(cfg.get("side_roc_window", 14))
+    mask = is_sideway_df(
+        df,
+        adx_col=cfg.get("side_adx_col", "ADX14"),
+        atr_period=atr_period,
+        roc_window=roc_window,
+        adx_thresh=adx_thresh,
+        atrpct_thresh=atrpct_thresh,
+        roc_thresh=roc_thresh,
+    )
+    out["sideway"] = {
+        "mask": mask.tolist(),
+        "params": {
+            "adx_thresh": adx_thresh,
+            "atr_pct_thresh": atrpct_thresh,
+            "roc_thresh": roc_thresh,
+            "atr_period": atr_period,
+            "roc_window": roc_window,
+        }
+    }
 
     # --- สรุป
     out["all_pass"] = bool(trend_pass and vol_pass and sess_pass)  # volume เป็นตัวเลือก จะไม่นับก็ได้
