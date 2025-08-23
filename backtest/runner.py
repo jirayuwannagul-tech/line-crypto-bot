@@ -9,15 +9,29 @@ def run_dow_backtest():
     try:
         swings = dow.detect_swings(df)
     except AttributeError:
-        # fallback ถ้าใน dow.py ชื่อฟังก์ชันไม่ตรง
         if hasattr(dow, "analyze_dow"):
             swings = dow.analyze_dow(df)
         else:
             raise RuntimeError("❌ dow.py ไม่มีฟังก์ชัน detect_swings หรือ analyze_dow")
 
     print("=== สัญญาณจาก Dow (Swing High/Low) ===")
-    print(swings.head(20))   # แสดง 20 จุดแรก
-    print("\nรวมทั้งหมด:", len(swings), "สัญญาณ")
+
+    # ถ้าเป็น dict → print keys + ตัวอย่าง
+    if isinstance(swings, dict):
+        for k, v in swings.items():
+            print(f"\n[{k}] → {len(v)} จุด")
+            # ถ้าเป็น list → แสดง 5 ตัวแรก
+            if isinstance(v, list):
+                print("ตัวอย่าง:", v[:5])
+            # ถ้าเป็น DataFrame/Series → ใช้ head()
+            elif hasattr(v, "head"):
+                print(v.head())
+            else:
+                print(v)
+    else:
+        # ถ้าไม่ใช่ dict เช่น DataFrame
+        print(swings.head(20))
+        print("\nรวมทั้งหมด:", len(swings), "สัญญาณ")
 
 if __name__ == "__main__":
     run_dow_backtest()
