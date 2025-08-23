@@ -141,6 +141,44 @@ def detect_flat(series: Series) -> Dict[str, Any]:
             return {"pattern": "flat", "points": last3}
     return {"pattern": None, "points": []}
 
+# --- เพิ่มเติม: Detectors สำหรับโมเมนตัม/เบรกเอาท์ที่ใช้ใน strategies_momentum ---
+
+def detect_breakout(series: Series, lookback: int = 20) -> Optional[Dict[str, Any]]:
+    """
+    Dummy breakout detector (ใช้งานง่าย/เร็ว):
+    - ถ้าปิดแท่งล่าสุด > max(close[-lookback:]) → breakout ขึ้น
+    - ถ้าปิดแท่งล่าสุด < min(close[-lookback:]) → breakout ลง
+    คืนค่า: {"is_valid": True, "meta": {"direction": "up|down", "last": ..., "high": ..., "low": ...}}
+    """
+    import pandas as pd
+    df = pd.DataFrame(series.get("candles", []))
+    if "close" not in df or len(df) < lookback + 1:
+        return None
+    last = float(pd.to_numeric(df["close"], errors="coerce").iloc[-1])
+    window = pd.to_numeric(df["close"], errors="coerce").tail(lookback)
+    high = float(window.max())
+    low  = float(window.min())
+    if last > high:
+        return {"is_valid": True, "meta": {"direction": "up", "last": last, "high": high, "low": low}}
+    if last < low:
+        return {"is_valid": True, "meta": {"direction": "down", "last": last, "high": high, "low": low}}
+    return None
+
+def detect_inside_bar(series: Series, lookback: int = 2) -> Optional[Dict[str, Any]]:
+    """
+    Dummy inside-bar detector:
+    - ภายใน lookback=2: ตรวจว่าแท่งล่าสุดอยู่ในกรอบ high/low ของแท่งก่อนหน้า
+    """
+    import pandas as pd
+    df = pd.DataFrame(series.get("candles", []))
+    if len(df) < 2:
+        return None
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+    if (last["high"] <= prev["high"]) and (last["low"] >= prev["low"]):
+        return {"is_valid": True, "meta": {"high": float(last["high"]), "low": float(last["low"])}}
+    return None
+
 # =============================================================================
 # LAYER D) AGGREGATOR
 # -----------------------------------------------------------------------------
