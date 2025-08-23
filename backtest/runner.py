@@ -2,10 +2,8 @@ import pandas as pd
 from app.analysis import dow
 
 def run_dow_backtest():
-    # โหลดข้อมูลย้อนหลัง
     df = pd.read_excel("app/data/historical.xlsx")
 
-    # เรียกใช้ logic Dow
     try:
         swings = dow.detect_swings(df)
     except AttributeError:
@@ -16,22 +14,20 @@ def run_dow_backtest():
 
     print("=== สัญญาณจาก Dow (Swing High/Low) ===")
 
-    # ถ้าเป็น dict → print keys + ตัวอย่าง
     if isinstance(swings, dict):
         for k, v in swings.items():
-            print(f"\n[{k}] → {len(v)} จุด")
-            # ถ้าเป็น list → แสดง 5 ตัวแรก
+            print(f"\n[{k}]")
             if isinstance(v, list):
+                print("จำนวน:", len(v))
                 print("ตัวอย่าง:", v[:5])
-            # ถ้าเป็น DataFrame/Series → ใช้ head()
             elif hasattr(v, "head"):
+                print("DataFrame/Series:")
                 print(v.head())
             else:
-                print(v)
+                print("ค่า:", v)
     else:
-        # ถ้าไม่ใช่ dict เช่น DataFrame
-        print(swings.head(20))
-        print("\nรวมทั้งหมด:", len(swings), "สัญญาณ")
+        print("ไม่ใช่ dict:", type(swings))
+        print(swings.head(20) if hasattr(swings, "head") else swings)
 
 if __name__ == "__main__":
     run_dow_backtest()
