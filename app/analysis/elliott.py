@@ -1,23 +1,25 @@
 # app/analysis/elliott.py
 # -----------------------------------------------------------------------------
-# Basic Elliott Wave Analyzer (rule-based, heuristic)
-# Returns a compact payload for downstream use:
-#   {
-#     "pattern": "IMPULSE|DIAGONAL|ZIGZAG|FLAT|TRIANGLE|DOUBLE_THREE|TRIPLE_THREE|UNKNOWN",
-#     "completed": bool,
-#     "current": {"stage": "...", "direction": "up|down|side"},
-#     "next": {"stage": "...", "direction": "up|down|side"},
-#     "targets": {"key": float, ...},          # fibonacci-based objective levels
-#     "debug": { "swings": DataFrame-like, ... }  # minimal debug info (safe to ignore)
+# Elliott Wave - RULES ONLY
+# ตรวจสอบ "กฎ" ของรูปแบบหลักโดยไม่ใส่ heuristic/target/การคาดคะเนใด ๆ
+# คืนค่าผลลัพธ์แบบ:
+# {
+#   "pattern": "IMPULSE|DIAGONAL|ZIGZAG|FLAT|TRIANGLE|UNKNOWN",
+#   "rules": [
+#       {"name": "...", "passed": true/false, "details": {...}},
+#       ...
+#   ],
+#   "debug": {
+#       "swings": [...],          # รายการสวิงล่าสุด
+#       "window_indices": [...],  # index ของสวิงที่ใช้ตัดสิน
+#       "window_types": [...],    # H/L
+#       "window_prices": [...]
 #   }
-#
-# Notes:
-# - Uses fractal pivots to extract swing points, then tries to fit patterns.
-# - Enforces Elliott hard rules for Impulse (with fallback to Diagonal when overlap).
-# - Corrective patterns handled: Zigzag (5-3-5), Flat (3-3-5), Triangle (3-3-3-3-3).
-# - Composite corrections (placeholders): Double Three (W-X-Y), Triple Three (W-X-Y-X-Z).
-# - Targets are heuristic Fibo projections suitable as starting points for orchestration.
-# - This is intentionally conservative to avoid false “Impulse” labels.
+# }
+# หมายเหตุ:
+# - ไม่มีการฟันธงว่า "completed/progress" และไม่มี Fibonacci targets
+# - ไม่มี heuristic ใด ๆ (เช่น breakout factor, median, projection)
+# - DIAGONAL: ระบุเมื่อโครงสร้างเหมือน impulse แต่ Wave4 ซ้อนทับ (overlap) Wave1
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
@@ -28,28 +30,10 @@ from typing import Dict, List, Literal, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-# =============================================================================
-# Tunable thresholds (ช่วยให้จูนได้ภายหลัง)
-# =============================================================================
-# เกณฑ์ "breakout" ของ wave5 เมื่อเทียบปลาย wave3 (คิดเป็นสัดส่วนของ median(w1,w3,w5))
-IMPULSE_TOP_BREAKOUT_FACTOR: float = 0.30
-# เกณฑ์ "ขนาดของ wave5" ขั้นต่ำเทียบกับคลื่น motive ที่สั้นกว่าใน (w1,w3)
-IMPULSE_W5_MIN_RATIO: float = 0.60
-
 Direction = Literal["up", "down", "side"]
-Pattern = Literal[
-    "IMPULSE",
-    "DIAGONAL",
-    "ZIGZAG",
-    "FLAT",
-    "TRIANGLE",
-    "DOUBLE_THREE",
-    "TRIPLE_THREE",
-    "UNKNOWN",
-]
+Pattern = Literal["IMPULSE", "DIAGONAL", "ZIGZAG", "FLAT", "TRIANGLE", "UNKNOWN"]
 
-__all__ = ["analyze_elliott", "Pattern", "Direction"]
-
+__all__ = ["analyze_elliott_rules", "Pattern", "Direction"]
 
 # =============================================================================
 # Utilities: pivots & swings
@@ -94,13 +78,10 @@ def _build_swings(df: pd.DataFrame, left: int = 2, right: int = 2) -> pd.DataFra
                 "type": "L",
             })
 
-    # ✅ ต้องเช็คก่อนสร้าง DataFrame และก่อน sort เสมอ
     if not rows:
         return pd.DataFrame(columns=["idx", "timestamp", "price", "type"])
 
     sw = pd.DataFrame.from_records(rows)
-
-    # กันกรณีผิดปกติที่ไม่มีคีย์ 'idx' ในแถวใดแถวหนึ่ง
     if "idx" not in sw.columns:
         return pd.DataFrame(columns=["idx", "timestamp", "price", "type"])
 
@@ -153,268 +134,115 @@ def _dir(a: float, b: float) -> Direction:
     if b < a: return "down"
     return "side"
 
-
 # =============================================================================
-# Pattern detectors (heuristic, rule-checked)
+# Rule reporting
 # =============================================================================
 
 @dataclass
-class DetectResult:
-    pattern: Pattern
-    completed: bool
-    current_stage: str
-    next_stage: str
-    direction: Direction
-    targets: Dict[str, float]
-    meta: Dict[str, object]
+class Rule:
+    name: str
+    passed: bool
+    details: Dict[str, object]
 
 
-def _detect_impulse(sw: pd.DataFrame, allow_diagonal: bool = True) -> Optional[DetectResult]:
-    """
-    Try to fit last 6 alternating swings to an impulse (1-2-3-4-5).
-    Rules checked:
-      - Wave2 does not retrace beyond start of Wave1
-      - Wave3 not the shortest among motive (1,3,5)
-      - Wave4 does not overlap Wave1 price territory (if overlaps -> DIAGONAL if allowed)
+def _report(pattern: Pattern, rules: List[Rule], win: pd.DataFrame) -> Dict[str, object]:
+    return {
+        "pattern": pattern,
+        "rules": [{"name": r.name, "passed": r.passed, "details": r.details} for r in rules],
+        "debug": {
+            "swings": win.tail(12).to_dict("records"),
+            "window_indices": win["idx"].tolist(),
+            "window_types": win["type"].tolist(),
+            "window_prices": win["price"].tolist(),
+        },
+    }
+
+# =============================================================================
+# RULE CHECKERS (no heuristics/targets/completion)
+# =============================================================================
+
+def _check_impulse_rules(sw: pd.DataFrame) -> Optional[Dict[str, object]]:
+    """Impulse rules only:
+       - Alternation ends with motive extreme (L-H-L-H-L-H or H-L-H-L-H-L)
+       - Wave2 does not retrace beyond start of Wave1
+       - Wave3 not the shortest among motive waves (1,3,5)
+       - Wave4 does not overlap Wave1 price territory
     """
     if len(sw) < 6:
         return None
 
-    # Iterate windows from most recent backwards to find a valid fit
     for end in range(len(sw), 5, -1):
-        win = sw.iloc[end - 6 : end]  # 6 points -> 5 waves
+        win = sw.iloc[end - 6 : end]  # 6 points -> 5 legs
         types = win["type"].tolist()
         prices = win["price"].tolist()
-        idxs = win["idx"].tolist()
 
-        # Valid alternation must end with same extreme type as wave5:
-        # Up impulse ends at H (L-H-L-H-L-H); Down impulse ends at L (H-L-H-L-H-L)
         if types not in (["L","H","L","H","L","H"], ["H","L","H","L","H","L"]):
             continue
 
         direction = "up" if types[-1] == "H" else "down"
-
         p0, p1, p2, p3, p4, p5 = prices
-        # Legs
+
         w1 = _leg_len(p0, p1)
-        w2 = _leg_len(p1, p2)
         w3 = _leg_len(p2, p3)
-        w4 = _leg_len(p3, p4)
         w5 = _leg_len(p4, p5)
 
-        # ---- Rule 1: Wave2 not beyond Wave1 start
+        rules: List[Rule] = []
+
+        # Rule 1: Wave2 not beyond Wave1 start
+        r1_ok = (p2 > p0) if direction == "up" else (p2 < p0)
+        rules.append(Rule(
+            name="Wave2 does not retrace beyond start of Wave1",
+            passed=bool(r1_ok),
+            details={"p0": p0, "p2": p2, "direction": direction},
+        ))
+
+        # Rule 2: Wave3 not the shortest (among 1,3,5)
+        shortest = min(w1, w3, w5)
+        r2_ok = (w3 > shortest) or (w3 == shortest and not (w3 == w1 == w5))
+        rules.append(Rule(
+            name="Wave3 is not the shortest among motive (1,3,5)",
+            passed=bool(r2_ok),
+            details={"w1": w1, "w3": w3, "w5": w5},
+        ))
+
+        # Rule 3: Wave4 no overlap with Wave1 price territory
         if direction == "up":
-            if p2 <= p0:  # retraced below start of W1
-                continue
+            r3_ok = (p4 > p1)
         else:
-            if p2 >= p0:
-                continue
+            r3_ok = (p4 < p1)
+        rules.append(Rule(
+            name="Wave4 does not overlap Wave1 price territory",
+            passed=bool(r3_ok),
+            details={"p1": p1, "p4": p4, "direction": direction},
+        ))
 
-        # ---- Rule 2: Wave3 not the shortest among (1,3,5)
-        motive_lengths = [w1, w3, w5]
-        if w3 < min(w1, w5):
-            continue
+        # สรุป: ถ้าทุกข้อผ่าน ⇒ IMPULSE; ถ้า fail เฉพาะ r3 (overlap) แต่ข้ออื่นผ่าน ⇒ DIAGONAL
+        all_pass = all(r.passed for r in rules)
+        if all_pass:
+            return _report("IMPULSE", rules, win)
 
-        # ---- Rule 3: Wave4 overlap Wave1 territory?
-        overlap = False
-        if direction == "up":
-            # wave4 low must be above wave1 high (no overlap)
-            if p4 <= p1:
-                overlap = True
-        else:
-            # wave4 high must be below wave1 low
-            if p4 >= p1:
-                overlap = True
+        # DIAGONAL condition: overlap only
+        if (not r3_ok) and rules[0].passed and rules[1].passed:
+            return _report("DIAGONAL", rules, win)
 
-        if overlap and not allow_diagonal:
-            continue
-
-        # =============================================================================
-        # Completion heuristic (แยก progress vs top):
-        # ใช้สองเกณฑ์: (1) breakout ของ wave5 เทียบปลาย wave3, (2) ขนาดของ w5 เทียบ w1,w3
-        # =============================================================================
-        motive_med = float(np.median([w1, w3, max(w5, 1e-9)]))
-        if direction == "up":
-            breakout = max(0.0, p5 - p3)
-        else:
-            breakout = max(0.0, p3 - p5)
-        break_ok = breakout >= IMPULSE_TOP_BREAKOUT_FACTOR * motive_med
-        w5_ok    = w5 >= IMPULSE_W5_MIN_RATIO * min(w1, w3)
-
-        if break_ok and w5_ok:
-            # === เคสถึงยอดแล้ว (TOP/DIAGONAL TOP) ===
-            completed = True
-            current_stage = "impulse_5_complete"
-            next_stage = "corrective_A" if direction == "up" else "corrective_A_down"
-
-            # Targets for the NEXT move (post-impulse correction) using fib retrace of wave (0->5)
-            total_len = abs(p5 - p0)
-            if direction == "up":
-                t_382 = p5 - total_len * 0.382
-                t_500 = p5 - total_len * 0.500
-                t_618 = p5 - total_len * 0.618
-                targets = {
-                    "post_impulse_retrace_38.2%": float(t_382),
-                    "post_impulse_retrace_50%": float(t_500),
-                    "post_impulse_retrace_61.8%": float(t_618),
-                }
-            else:
-                t_382 = p5 + total_len * 0.382
-                t_500 = p5 + total_len * 0.500
-                t_618 = p5 + total_len * 0.618
-                targets = {
-                    "post_impulse_retrace_38.2%": float(t_382),
-                    "post_impulse_retrace_50%": float(t_500),
-                    "post_impulse_retrace_61.8%": float(t_618),
-                }
-        else:
-            # === เคสยัง "IMPULSE กำลังดำเนิน" (PROGRESS) ===
-            completed = False
-            current_stage = "impulse_progress"
-            next_stage = "impulse_5_in_progress"
-
-            # Targets: โปรเจคชั่น wave5 ต่อจาก p4 (100%–161.8% ของ w1)
-            base = max(w1, 1e-9)
-            proj_100 = 1.00 * base
-            proj_1618 = 1.618 * base
-            if direction == "up":
-                targets = {
-                    "wave5_projection_100%": float(p4 + proj_100),
-                    "wave5_projection_161.8%": float(p4 + proj_1618),
-                }
-            else:
-                targets = {
-                    "wave5_projection_100%": float(p4 - proj_100),
-                    "wave5_projection_161.8%": float(p4 - proj_1618),
-                }
-
-        patt: Pattern = "IMPULSE"
-        if overlap:
-            patt = "DIAGONAL"
-
-        return DetectResult(
-            pattern=patt,
-            completed=completed,
-            current_stage=current_stage,
-            next_stage=next_stage,
-            direction=direction,
-            targets=targets,
-            meta={
-                "window_indices": idxs,
-                "window_types": types,
-                "window_prices": prices,
-                "overlap": overlap,
-                "legs": {"w1": w1, "w2": w2, "w3": w3, "w4": w4, "w5": w5},
-                "completion_metrics": {
-                    "breakout": float(breakout),
-                    "motive_median": float(motive_med),
-                    "break_ok": bool(break_ok),
-                    "w5_ok": bool(w5_ok),
-                    "BREAKOUT_FACTOR": IMPULSE_TOP_BREAKOUT_FACTOR,
-                    "W5_MIN_RATIO": IMPULSE_W5_MIN_RATIO,
-                },
-            },
-        )
     return None
 
 
-def _detect_zigzag(sw: pd.DataFrame) -> Optional[DetectResult]:
-    """
-    Zigzag: A-B-C with 5-3-5 spirit (heuristic without internal 5-count)
-    Checks:
-      - B retraces ~38.2–61.8% of A
-      - C length ~ 1.0×A (±10–15%) or ~1.618×A (±15%)
+def _check_zigzag_rules(sw: pd.DataFrame) -> Optional[Dict[str, object]]:
+    """Zigzag rules (ใช้ tolerance แบบตำรา):
+       - โครงสร้าง 4 จุดสลับ H/L: H-L-H-L หรือ L-H-L-H
+       - B retrace ของ A อยู่ในช่วง ~38.2% ถึง ~61.8%
+       - C เดินทางทิศเดียวกับ A
+       - ความยาว C ~ เท่า A (±15%) หรือ ~1.618×A (±15%)
     """
     if len(sw) < 4:
         return None
 
-    # Look at last 4 swings (A end, B end, C end -> 3 legs = 4 points)
     for end in range(len(sw), 3, -1):
         win = sw.iloc[end - 4 : end]  # P0 P1 P2 P3
         types = win["type"].tolist()
         prices = win["price"].tolist()
-        idxs = win["idx"].tolist()
 
-        # Must be alternating H/L/H/L or L/H/L/H
-        if types not in (["H","L","H","L"], ["L","H","L","H"]):
-            continue
-
-        p0, p1, p2, p3 = prices
-        dir_A = _dir(p0, p1)  # direction of A
-        if dir_A == "side":
-            continue
-
-        # B retrace of A
-        rB = _retracement_ratio(p0, p1, p2)
-        if rB is None:
-            continue
-        if not (0.30 <= rB <= 0.70):  # a bit flexible around 38.2–61.8
-            continue
-
-        # C in same direction as A
-        if _dir(p2, p3) != dir_A:
-            continue
-
-        # C length relation to A
-        A_len = _leg_len(p0, p1)
-        C_len = _leg_len(p2, p3)
-        ratio_CA = _ratio(C_len, A_len) or 0.0
-
-        close_to_1 = 0.85 <= ratio_CA <= 1.15
-        close_to_1_618 = 1.35 <= ratio_CA <= 1.85
-        if not (close_to_1 or close_to_1_618):
-            continue
-
-        direction = "down" if dir_A == "down" else "up"
-        completed = True
-        current_stage = "zigzag_C_complete"
-        next_stage = "resume_trend_up" if direction == "down" else "resume_trend_down"
-
-        # Targets post zigzag: look for retrace of whole A→C
-        total = abs(p3 - p0)
-        if direction == "up":
-            # Zigzag up (rare as correction), next often down
-            t382 = p3 - total * 0.382
-            t500 = p3 - total * 0.5
-            targets = {
-                "post_zigzag_retrace_38.2%": float(t382),
-                "post_zigzag_retrace_50%": float(t500),
-            }
-        else:
-            # Zigzag down (typical correction), next often up
-            t382 = p3 + total * 0.382
-            t500 = p3 + total * 0.5
-            targets = {
-                "post_zigzag_retrace_38.2%": float(t382),
-                "post_zigzag_retrace_50%": float(t500),
-            }
-
-        return DetectResult(
-            pattern="ZIGZAG",
-            completed=completed,
-            current_stage=current_stage,
-            next_stage=next_stage,
-            direction=direction,
-            targets=targets,
-            meta={"window_indices": idxs, "window_types": types, "window_prices": prices, "B_retrace": rB, "C_A_ratio": ratio_CA},
-        )
-    return None
-
-
-def _detect_flat(sw: pd.DataFrame) -> Optional[DetectResult]:
-    """
-    Flat: A-B-C with 3-3-5 spirit (heuristic)
-      - B retraces deep ~90–105% of A
-      - C ≈ length of A (±15%) or ~1.618×A (±15%) for Expanded
-    """
-    if len(sw) < 4:
-        return None
-
-    for end in range(len(sw), 3, -1):
-        win = sw.iloc[end - 4 : end]
-        types = win["type"].tolist()
-        prices = win["price"].tolist()
-        idxs = win["idx"].tolist()
         if types not in (["H","L","H","L"], ["L","H","L","H"]):
             continue
 
@@ -423,66 +251,106 @@ def _detect_flat(sw: pd.DataFrame) -> Optional[DetectResult]:
         if dir_A == "side":
             continue
 
+        rules: List[Rule] = []
+
+        # Rule 1: B retracement of A in [0.382, 0.618]
         rB = _retracement_ratio(p0, p1, p2)
-        if rB is None or not (0.90 <= rB <= 1.08):  # ~90–105%
-            continue
+        r1_ok = rB is not None and (0.382 <= rB <= 0.618)
+        rules.append(Rule(
+            name="B retraces 38.2%–61.8% of A",
+            passed=bool(r1_ok),
+            details={"B_retrace": float(rB) if rB is not None else None},
+        ))
 
-        # C same direction as A
-        if _dir(p2, p3) != dir_A:
-            continue
+        # Rule 2: C same direction as A
+        r2_ok = (_dir(p2, p3) == dir_A)
+        rules.append(Rule(
+            name="C moves in the same direction as A",
+            passed=bool(r2_ok),
+            details={"dir_A": dir_A, "dir_C": _dir(p2, p3)},
+        ))
 
+        # Rule 3: |C| ≈ |A| (±15%) หรือ ≈ 1.618×|A| (±15%)
         A_len = _leg_len(p0, p1)
         C_len = _leg_len(p2, p3)
         ratio_CA = _ratio(C_len, A_len) or 0.0
+        r3_ok = (0.85 <= ratio_CA <= 1.15) or (1.618 * 0.85 <= ratio_CA <= 1.618 * 1.15)
+        rules.append(Rule(
+            name="|C| ≈ |A| or ≈ 1.618×|A| (±15%)",
+            passed=bool(r3_ok),
+            details={"|A|": A_len, "|C|": C_len, "C/A": ratio_CA},
+        ))
 
-        is_regular = 0.85 <= ratio_CA <= 1.15
-        is_expanded = 1.35 <= ratio_CA <= 1.85
+        if all(r.passed for r in rules):
+            return _report("ZIGZAG", rules, win)
 
-        if not (is_regular or is_expanded):
-            continue
-
-        direction = "down" if dir_A == "down" else "up"
-        completed = True
-        current_stage = "flat_C_complete"
-        next_stage = "resume_trend_up" if direction == "down" else "resume_trend_down"
-
-        # Post-flat targets: mild retrace of the whole structure
-        total = abs(p3 - p0)
-        if direction == "down":
-            t382 = p3 + total * 0.382
-            t500 = p3 + total * 0.5
-        else:
-            t382 = p3 - total * 0.382
-            t500 = p3 - total * 0.5
-        targets = {
-            "post_flat_retrace_38.2%": float(t382),
-            "post_flat_retrace_50%": float(t500),
-        }
-
-        return DetectResult(
-            pattern="FLAT",
-            completed=completed,
-            current_stage=current_stage,
-            next_stage=next_stage,
-            direction=direction,
-            targets=targets,
-            meta={
-                "window_indices": idxs,
-                "window_types": types,
-                "window_prices": prices,
-                "B_retrace": rB,
-                "C_A_ratio": ratio_CA,
-                "variant": "Expanded" if is_expanded else "Regular",
-            },
-        )
     return None
 
 
-def _detect_triangle(sw: pd.DataFrame) -> Optional[DetectResult]:
+def _check_flat_rules(sw: pd.DataFrame) -> Optional[Dict[str, object]]:
+    """Flat rules:
+       - โครงสร้าง 4 จุดสลับ H/L
+       - B retrace ลึกของ A ~90%–110% (รวมกรณี B เกินเล็กน้อย)
+       - C ทิศเดียวกับ A
+       - |C| ≈ |A| (±15%) หรือ ≈ 1.618×|A| (±15%) (Expanded Flat)
     """
-    Triangle: 5-leg contracting/expanding (A-B-C-D-E). Heuristic checks:
-      - 5 alternating swings ending with E
-      - Contracting: highs lower, lows higher; Expanding: highs higher, lows lower.
+    if len(sw) < 4:
+        return None
+
+    for end in range(len(sw), 3, -1):
+        win = sw.iloc[end - 4 : end]
+        types = win["type"].tolist()
+        prices = win["price"].tolist()
+
+        if types not in (["H","L","H","L"], ["L","H","L","H"]):
+            continue
+
+        p0, p1, p2, p3 = prices
+        dir_A = _dir(p0, p1)
+        if dir_A == "side":
+            continue
+
+        rules: List[Rule] = []
+
+        # Rule 1: B retrace ~90%–110% ของ A
+        rB = _retracement_ratio(p0, p1, p2)
+        r1_ok = rB is not None and (0.90 <= rB <= 1.10)
+        rules.append(Rule(
+            name="B retraces ~90%–110% of A",
+            passed=bool(r1_ok),
+            details={"B_retrace": float(rB) if rB is not None else None},
+        ))
+
+        # Rule 2: C ทิศเดียวกับ A
+        r2_ok = (_dir(p2, p3) == dir_A)
+        rules.append(Rule(
+            name="C moves in the same direction as A",
+            passed=bool(r2_ok),
+            details={"dir_A": dir_A, "dir_C": _dir(p2, p3)},
+        ))
+
+        # Rule 3: |C| ≈ |A| (±15%) หรือ ≈ 1.618×|A| (±15%)
+        A_len = _leg_len(p0, p1)
+        C_len = _leg_len(p2, p3)
+        ratio_CA = _ratio(C_len, A_len) or 0.0
+        r3_ok = (0.85 <= ratio_CA <= 1.15) or (1.618 * 0.85 <= ratio_CA <= 1.618 * 1.15)
+        rules.append(Rule(
+            name="|C| ≈ |A| or ≈ 1.618×|A| (±15%)",
+            passed=bool(r3_ok),
+            details={"|A|": A_len, "|C|": C_len, "C/A": ratio_CA},
+        ))
+
+        if all(r.passed for r in rules):
+            return _report("FLAT", rules, win)
+
+    return None
+
+
+def _check_triangle_rules(sw: pd.DataFrame) -> Optional[Dict[str, object]]:
+    """Triangle rules:
+       - มี 5 สวิงสลับสิ้นสุดที่ E: (H,L,H,L,H) หรือ (L,H,L,H,L)
+       - Contracting: ชุด high ลดลงต่อเนื่อง และชุด low สูงขึ้นต่อเนื่อง
+         หรือ Expanding: ชุด high สูงขึ้นต่อเนื่อง และชุด low ลดลงต่อเนื่อง
     """
     if len(sw) < 5:
         return None
@@ -491,7 +359,6 @@ def _detect_triangle(sw: pd.DataFrame) -> Optional[DetectResult]:
         win = sw.iloc[end - 5 : end]  # A B C D E
         types = win["type"].tolist()
         prices = win["price"].tolist()
-        idxs = win["idx"].tolist()
 
         if types not in (["H","L","H","L","H"], ["L","H","L","H","L"]):
             continue
@@ -499,7 +366,7 @@ def _detect_triangle(sw: pd.DataFrame) -> Optional[DetectResult]:
         highs = [p for t, p in zip(types, prices) if t == "H"]
         lows  = [p for t, p in zip(types, prices) if t == "L"]
 
-        if len(highs) < 2 or len(lows) < 2:
+        if len(highs) < 3 or len(lows) < 3:
             continue
 
         contracting = (all(x > y for x, y in zip(highs, highs[1:])) and
@@ -507,188 +374,74 @@ def _detect_triangle(sw: pd.DataFrame) -> Optional[DetectResult]:
         expanding   = (all(x < y for x, y in zip(highs, highs[1:])) and
                        all(x > y for x, y in zip(lows,  lows[1:])))
 
-        if not (contracting or expanding):
-            continue
+        rules = [
+            Rule(
+                name="Alternating 5-leg structure (A-B-C-D-E)",
+                passed=True,
+                details={"types": types},
+            ),
+            Rule(
+                name="Contracting highs/lows OR Expanding highs/lows",
+                passed=bool(contracting or expanding),
+                details={"mode": "Contracting" if contracting else ("Expanding" if expanding else "None")},
+            ),
+        ]
 
-        # Direction after triangle = thrust in prior trend; we guess using first two legs
-        direction = _dir(prices[0], prices[1])
-        if direction == "side":
-            direction = "up" if contracting else "down"
+        if all(r.passed for r in rules):
+            return _report("TRIANGLE", rules, win)
 
-        completed = True
-        current_stage = "triangle_E_complete"
-        next_stage = "thrust_" + ("up" if direction == "up" else "down")
-
-        # Thrust target approx width of widest section projected from breakout (E->)
-        width = max(highs[0] - lows[0], highs[-1] - lows[-1])
-        pE = prices[-1]
-        if direction == "up":
-            targets = {"triangle_thrust": float(pE + width)}
-        else:
-            targets = {"triangle_thrust": float(pE - width)}
-
-        return DetectResult(
-            pattern="TRIANGLE",
-            completed=completed,
-            current_stage=current_stage,
-            next_stage=next_stage,
-            direction=direction,
-            targets=targets,
-            meta={"window_indices": idxs, "window_types": types, "window_prices": prices,
-                  "mode": "Contracting" if contracting else "Expanding", "width": width},
-        )
     return None
 
-
 # =============================================================================
-# Extra detectors
-# =============================================================================
-
-def _detect_diagonal(sw: pd.DataFrame) -> Optional[DetectResult]:
-    """Heuristic diagonal detector (very lightweight; fallback when impulse fails)."""
-    if len(sw) < 6:
-        return None
-    win = sw.iloc[-6:]
-    types = win["type"].tolist()
-    prices = win["price"].tolist()
-    idxs = win["idx"].tolist()
-    if types not in (["L","H","L","H","L","H"], ["H","L","H","L","H","L"]):
-        return None
-    return DetectResult(
-        pattern="DIAGONAL",
-        completed=True,
-        current_stage="wave5_diag",
-        next_stage="corrective_A",
-        direction="up" if types[-1] == "H" else "down",
-        targets={},
-        meta={"window_indices": idxs, "window_types": types, "window_prices": prices},
-    )
-
-
-def _detect_double_three(sw: pd.DataFrame) -> Optional[DetectResult]:
-    """Simple placeholder for W-X-Y correction (Double Three)."""
-    return DetectResult(
-        pattern="DOUBLE_THREE",
-        completed=False,
-        current_stage="WXY_partial",
-        next_stage="continue",
-        direction="side",
-        targets={},
-        meta={},
-    )
-
-
-def _detect_triple_three(sw: pd.DataFrame) -> Optional[DetectResult]:
-    """Simple placeholder for W-X-Y-X-Z correction (Triple Three)."""
-    return DetectResult(
-        pattern="TRIPLE_THREE",
-        completed=False,
-        current_stage="WXYXZ_partial",
-        next_stage="continue",
-        direction="side",
-        targets={},
-        meta={},
-    )
-
-
-# =============================================================================
-# Public API
+# Public API (RULES ONLY)
 # =============================================================================
 
-def analyze_elliott(
+def analyze_elliott_rules(
     df: pd.DataFrame,
     *,
     pivot_left: int = 2,
     pivot_right: int = 2,
-    allow_diagonal: bool = True,
     max_swings: int = 30,
 ) -> Dict[str, object]:
     """
-    Basic Elliott analysis from OHLCV DataFrame.
-    Requirements: columns ['timestamp','open','high','low','close','volume'] (timestamp optional for swings).
-    Returns:
-      {pattern, completed, current, next, targets, debug}
+    ตรวจสอบเฉพาะ "กฎ" ของรูปแบบ Elliott Wave จาก OHLC DataFrame
+    ต้องมีคอลัมน์อย่างน้อย: ['high','low','close']
     """
-    # Minimal data
     needed = {"high", "low", "close"}
     if not needed.issubset(df.columns):
-        return _unknown("missing_columns", details={"columns": list(df.columns)})
+        return {
+            "pattern": "UNKNOWN",
+            "rules": [{"name": "missing_columns", "passed": False, "details": {"columns": list(df.columns)}}],
+            "debug": {},
+        }
 
-    # Swings
     sw = _build_swings(df, left=pivot_left, right=pivot_right)
     if len(sw) == 0:
-        return _unknown("no_swings")
+        return {"pattern": "UNKNOWN", "rules": [{"name": "no_swings", "passed": False, "details": {}}], "debug": {}}
 
     if len(sw) > max_swings:
         sw = sw.tail(max_swings).reset_index(drop=True)
 
-    # Try patterns (priority: Impulse/Diagonal -> Zigzag -> Flat -> Triangle -> Extras)
-    det = _detect_impulse(sw, allow_diagonal=allow_diagonal)
-    if det is not None:
-        return _pack(det, sw)
+    # Priority: Impulse/Diagonal -> Zigzag -> Flat -> Triangle
+    res = _check_impulse_rules(sw)
+    if res is not None:
+        return res
 
-    det = _detect_zigzag(sw)
-    if det is not None:
-        return _pack(det, sw)
+    res = _check_zigzag_rules(sw)
+    if res is not None:
+        return res
 
-    det = _detect_flat(sw)
-    if det is not None:
-        return _pack(det, sw)
+    res = _check_flat_rules(sw)
+    if res is not None:
+        return res
 
-    det = _detect_triangle(sw)
-    if det is not None:
-        return _pack(det, sw)
+    res = _check_triangle_rules(sw)
+    if res is not None:
+        return res
 
-    # Fallback diagonals (very lenient) if strict impulse didn’t claim it
-    det = _detect_diagonal(sw)
-    if det is not None:
-        return _pack(det, sw)
-
-    # Placeholders for composite corrections (optional classification hints)
-    det = _detect_double_three(sw)
-    if det is not None:
-        return _pack(det, sw)
-
-    det = _detect_triple_three(sw)
-    if det is not None:
-        return _pack(det, sw)
-
-    # Fallback UNKNOWN with direction hint from last two closes
-    direction = _dir(float(df["close"].iloc[-5]), float(df["close"].iloc[-1])) if len(df) >= 5 else "side"
+    # ไม่เข้ากฎใด ๆ
     return {
         "pattern": "UNKNOWN",
-        "completed": False,
-        "current": {"stage": "undetermined", "direction": direction},
-        "next": {"stage": "await_more_data", "direction": "side"},
-        "targets": {},
-        "debug": {"swings": sw.tail(12).to_dict("records"), "reason": "no_pattern_fit"},
-    }
-
-
-# =============================================================================
-# Helpers
-# =============================================================================
-
-def _unknown(reason: str, details: Optional[Dict[str, object]] = None) -> Dict[str, object]:
-    return {
-        "pattern": "UNKNOWN",
-        "completed": False,
-        "current": {"stage": "undetermined", "direction": "side"},
-        "next": {"stage": "await_more_data", "direction": "side"},
-        "targets": {},
-        "debug": {"reason": reason, **(details or {})},
-    }
-
-
-def _pack(det: DetectResult, sw: pd.DataFrame) -> Dict[str, object]:
-    return {
-        "pattern": det.pattern,
-        "completed": det.completed,
-        "current": {"stage": det.current_stage, "direction": det.direction},
-        "next": {"stage": det.next_stage, "direction": det.direction},
-        "targets": det.targets,
-        "debug": {
-            "swings": sw.tail(12).to_dict("records"),
-            **det.meta,
-        },
+        "rules": [{"name": "no_pattern_rules_matched", "passed": False, "details": {}}],
+        "debug": {"swings": sw.tail(12).to_dict("records")},
     }
