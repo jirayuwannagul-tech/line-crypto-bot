@@ -4,20 +4,79 @@
 # - enrich_context: คำนวณ EMA slope, ATR%, recent_direction, swing_fail
 # - map_kind: แปลงผล pattern + context → kind (IMPULSE_TOP / IMPULSE_PROGRESS / CORRECTION / UNKNOWN)
 # - classify_elliott_with_kind: wrapper ที่เรียก base classify → enrich → map_kind
+# - classify_elliott: Public API (ให้ tests import) คืนโครงสร้างเดียวกัน
 # - _call_base_classify: ตัวเรียกใช้งาน classify_elliott (ถ้ามี) หรือ fallback ไป analysis layer
 # ============================================================
 
 from __future__ import annotations
 
+from typing import Any, Dict, Mapping, Sequence, Optional
 import pandas as pd
-from typing import Any, Dict
 
-# ------------------------------------------------------------
-# NOTE:
-# ถ้ามีฟังก์ชัน classify_elliott อยู่ในไฟล์นี้หรือถูก import ไว้ก่อนหน้า
-# _call_base_classify จะเรียกใช้อันนั้นโดยตรง
-# ถ้าไม่มี → จะ fallback ไปใช้ app.analysis.elliott (rules layer)
-# ------------------------------------------------------------
+__all__ = [
+    "classify_elliott",
+    "classify_elliott_with_kind",
+    "enrich_context",
+    "map_kind",
+]
+
+# -------------------- Utilities --------------------
+def _coerce_to_df(
+    data: Any,
+    *,
+    high_key: str = "high",
+    low_key: str = "low",
+    close_key: str = "close",
+    date_key: Optional[str] = "date",
+) -> pd.DataFrame:
+    """
+    แปลง input ให้เป็น DataFrame ที่มีคอลัมน์อย่างน้อย: high/low/close
+    รองรับรูปแบบ:
+      - pandas.DataFrame ที่มีคอลัมน์ตรงชื่อ
+      - Mapping[str, Sequence] เช่น {"high":[...], "low":[...], "close":[...]}
+      - Sequence[float] → จะ map เป็น close ล้วน (mock high/low จาก close)
+    """
+    if isinstance(data, pd.DataFrame):
+        df = data.copy()
+    elif isinstance(data, Mapping):
+        df = pd.DataFrame(data)
+    elif isinstance(data, Sequence):
+        df = pd.DataFrame({close_key: list(data)})
+    else:
+        raise TypeError("Unsupported input type for Elliott classification")
+
+    # Normalization ชื่อคอลัมน์
+    cols_lower = {c.lower(): c for c in df.columns}
+    for want in (high_key, low_key, close_key):
+        if want not in df.columns:
+            # หาเทียบแบบ lower
+            if want not in cols_lower and want.upper() in cols_lower:
+                df[want] = df[cols_lower[want.upper()]]
+            elif want not in cols_lower and want.capitalize() in cols_lower:
+                df[want] = df[cols_lower[want.capitalize()]]
+    # ถ้ายังไม่มี high/low ให้ mock จาก close
+    if high_key not in df.columns and close_key in df.columns:
+        df[high_key] = df[close_key]
+    if low_key not in df.columns and close_key in df.columns:
+        df[low_key] = df[close_key]
+
+    # ตรวจขั้นต่ำ
+    needed = {high_key, low_key, close_key}
+    if not needed.issubset(df.columns):
+        raise ValueError(f"Missing columns for Elliott classification: need {needed}, got {list(df.columns)}")
+
+    # sort by date ถ้ามี
+    dk = date_key if date_key and date_key in df.columns else None
+    if dk:
+        df = df.sort_values(dk).reset_index(drop=True)
+    else:
+        df = df.reset_index(drop=True)
+
+    # ตัดข้อมูลให้ไม่เกิน 600 แท่ง เพื่อความเร็ว
+    if len(df) > 600:
+        df = df.tail(600).reset_index(drop=True)
+    return df
+
 
 # -------------------- Indicators --------------------
 def _ema(series: pd.Series, span: int = 20) -> pd.Series:
@@ -31,10 +90,11 @@ def _atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     return tr.ewm(alpha=1/period, adjust=False).mean()
 
+
 # -------------------- Base classify resolver --------------------
 def _call_base_classify(df: pd.DataFrame) -> Dict[str, Any]:
     """
-    พยายามใช้ classify_elliott (ถ้ามี); ถ้าไม่มีก็ fallback ไป analysis layer
+    พยายามใช้ classify_elliott (ถ้ามีในสโคปปัจจุบัน); ถ้าไม่มีก็ fallback ไป analysis layer
     คืนโครงสร้างมาตรฐานแบบ dict
     """
     # 1) ใช้ classify_elliott จากสโคปปัจจุบัน (ถ้ามี)
@@ -74,6 +134,7 @@ def _call_base_classify(df: pd.DataFrame) -> Dict[str, Any]:
     # 3) สุดท้ายจริง ๆ
     return {"pattern": "UNKNOWN", "completed": False, "current": {}, "rules": [], "debug": {}}
 
+
 # -------------------- Context enrichment --------------------
 def enrich_context(df_ctx: pd.DataFrame, det: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -91,7 +152,7 @@ def enrich_context(df_ctx: pd.DataFrame, det: Dict[str, Any]) -> Dict[str, Any]:
         det["current"] = cur
         return det
 
-    df = df_ctx.sort_values("date").tail(120).reset_index(drop=True)
+    df = df_ctx.sort_values(df_ctx.columns[0]).tail(120).reset_index(drop=True) if "date" not in df_ctx.columns else df_ctx.sort_values("date").tail(120).reset_index(drop=True)
     close = df["close"]
     high, low = df["high"], df["low"]
 
@@ -125,6 +186,7 @@ def enrich_context(df_ctx: pd.DataFrame, det: Dict[str, Any]) -> Dict[str, Any]:
 
     det["current"] = cur
     return det
+
 
 # -------------------- Mapping to "kind" --------------------
 def map_kind(det: Dict[str, Any]) -> str:
@@ -200,6 +262,7 @@ def map_kind(det: Dict[str, Any]) -> str:
 
     return "UNKNOWN"
 
+
 # -------------------- Public API --------------------
 def classify_elliott_with_kind(df: pd.DataFrame) -> Dict[str, Any]:
     """
@@ -213,3 +276,13 @@ def classify_elliott_with_kind(df: pd.DataFrame) -> Dict[str, Any]:
     kind = map_kind(out)
     out["kind"] = kind
     return out
+
+
+def classify_elliott(data: Any) -> Dict[str, Any]:
+    """
+    Public API ที่ tests จะ import:
+      - รับข้อมูลได้หลากหลาย → แปลงเป็น DataFrame
+      - คืน dict ที่มี key 'kind' เสมอ
+    """
+    df = _coerce_to_df(data)
+    return classify_elliott_with_kind(df)

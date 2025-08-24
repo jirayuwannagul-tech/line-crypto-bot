@@ -33,12 +33,25 @@ MIN_SWING_PCT = 3.5
 CTX_BEFORE = 60
 CTX_AFTER = 60
 
+DATE_CANDIDATES = ["date","Date","timestamp","Timestamp","time","Time","open_time","Open time","Datetime","datetime"]
+
 # ============================================================
 # Helpers
 # ============================================================
 def load_df(path: str) -> pd.DataFrame:
     df = pd.read_excel(path)
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+
+    # หา column วันที่ที่ตรงกับ DATE_CANDIDATES
+    date_col = None
+    for candidate in DATE_CANDIDATES:
+        if candidate in df.columns:
+            date_col = candidate
+            break
+    if date_col is None:
+        raise ValueError(f"❌ ไม่พบ column วันที่ในไฟล์ {path}. ตรวจสอบชื่อ column ใน {DATE_CANDIDATES}")
+
+    # แปลงเป็น datetime
+    df["date"] = pd.to_datetime(df[date_col], errors="coerce")
     return df.sort_values("date").reset_index(drop=True)
 
 def slice_with_context(df, start, end):
@@ -55,7 +68,6 @@ def run_detector(df_test):
     if hasattr(ew, "analyze_elliott"):
         return ew.analyze_elliott(df_test, min_swing_pct=MIN_SWING_PCT, strict_impulse=True, allow_overlap=False)
     return {"pattern":"UNKNOWN","completed":False,"current":{}}
-
 
 # ============================================================
 # Main runner
