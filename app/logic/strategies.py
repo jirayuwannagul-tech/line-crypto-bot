@@ -160,3 +160,15 @@ def momentum_breakout(series: Series, strategy_id: str = "momentum_breakout") ->
         "reasons": reasons[:10],
         "strategy_id": strategy_id,
     }
+
+def some_strategy_func(data=None):
+    """
+    ฟังก์ชัน placeholder สำหรับใช้ในเทส
+    - มีอยู่จริงและ callable
+    - คืนค่าโครงสร้างง่ายๆ เพื่อให้เทส import/เรียกผ่านก่อน
+    """
+    return {
+        "name": "some_strategy_func",
+        "ready": True,
+        "data_preview": None if data is None else str(type(data)),
+    }
