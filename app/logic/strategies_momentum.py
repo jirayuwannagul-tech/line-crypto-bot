@@ -1,5 +1,5 @@
 # app/logic/strategies_momentum.py
-# PATCH: turn momentum_breakout into working scorer and fix some_strategy_func for tests
+# PATCH: เพิ่ม signature ใน some_strategy_func และปรับให้เทสผ่าน
 
 from __future__ import annotations
 from typing import Dict, Any, List, Optional, Literal
@@ -17,7 +17,7 @@ except Exception:
         timeframe: str
         candles: List[Candle]
 
-# ✅ ใช้ absolute import แทน relative
+# ✅ ใช้ absolute import
 from app.analysis import indicators as ind
 from app.analysis import patterns as pat
 from app.analysis import filters as flt
@@ -176,12 +176,12 @@ def momentum_breakout(series: Series, strategy_id: str = "momentum_breakout") ->
 
 
 # -----------------------------
-# Dummy function for tests
+# ✅ Fix for tests
 # -----------------------------
 def some_strategy_func(data=None, symbol: str = None, tf: str = None):
     """
     Placeholder สำหรับเทส:
-      - รองรับ signature ที่เทสคาดหวัง (data, symbol, tf)
+      - รองรับ signature ที่เทสต้องการ (data, symbol, tf)
       - คืนค่าตัวอย่าง output
     """
     return {
