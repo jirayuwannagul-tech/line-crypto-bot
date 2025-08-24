@@ -9,22 +9,22 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from app.analysis import elliott as ew
 
 # ============================================================
-# [Layer 2] ตั้งค่า / Test Case (โฟกัส IMPULSE_TOP)
+# [Layer 2] ตั้งค่า / Test Case
 # ============================================================
-#  ตัวอย่าง: May 2021 อยากบังคับอ่านเป็น "wave 5 end" (IMPULSE_TOP)
+# เป้าหมายเดิม: ตรวจว่า May 2021 เป็น "จบคลื่น 5" (IMPULSE_TOP)
 TEST_CASE = ("May 2021", "2021-05-01", "2021-05-31", "IMPULSE_TOP")
 
-# Analyzer parameters (โหมดเข้มงวดเพื่อ bias ไปทาง impulse top)
-USE_WEEKLY = True              # เริ่มจากรีแซมเปิลรายสัปดาห์
-MIN_SWING_PCT_WEEKLY = 6.0     # สวิงขั้นต่ำ (TF สัปดาห์) — ลอง 6–8%
-MIN_SWING_PCT_DAILY  = 4.0     # fallback รายวัน
+# --- ปรับตามตัวเลือก B ---
+USE_WEEKLY = False              # ใช้ "รายวัน" (ยกเลิกรีแซมเปิลรายสัปดาห์)
+MIN_SWING_PCT_WEEKLY = 6.0      # ไม่ใช้ในโหมดนี้ แต่คงไว้เผื่อสลับกลับ
+MIN_SWING_PCT_DAILY  = 3.5      # ลดความเข้มงวด เพื่อเห็นโครงสร้างมากขึ้น
 STRICT_IMPULSE = True
 ALLOW_OVERLAP  = False
-AUTO_FALLBACK_TO_DAILY = True
+AUTO_FALLBACK_TO_DAILY = True   # เผื่อใช้ ถ้าเปลี่ยนใจกลับไปเริ่มจาก weekly
 
-# ขยายช่วงข้อมูลให้ analyzer เห็น context มากขึ้น (ก่อน/หลัง)
-CTX_DAYS_BEFORE = 30
-CTX_DAYS_AFTER  = 30
+# เพิ่มบริบทก่อน/หลังให้กว้างขึ้น
+CTX_DAYS_BEFORE = 60
+CTX_DAYS_AFTER  = 60
 
 # ============================================================
 # [Layer 2.1] Helpers: โหลด & มาตรฐานคอลัมน์
@@ -104,7 +104,6 @@ def run_analyzer(df_test: pd.DataFrame, min_swing_pct: float, strict_impulse: bo
         return ew.analyze_elliott(df_test)
 
 def extract_detected(waves) -> dict | str:
-    # คืน dict ถ้าเป็น dict, ถ้าเป็น list คืน element ท้าย, ถ้าอย่างอื่นคืน str
     if isinstance(waves, dict):
         return waves
     if isinstance(waves, list) and len(waves) > 0:
@@ -123,56 +122,45 @@ df_all = load_df("app/data/historical.xlsx")
 df_all = normalize_df(df_all)
 
 # ============================================================
-# [Layer 4] เลือกกรอบเวลา (weekly → daily fallback ถ้าจำเป็น) + context
+# [Layer 4] เลือกกรอบเวลา + context (เริ่มที่รายวันตามตัวเลือก B)
 # ============================================================
 label, start, end, expected_kind = TEST_CASE
-used_timeframe = "W"
+used_timeframe = "D"
+base_df = df_all
 
-base_df = resample_weekly(df_all) if USE_WEEKLY else df_all
 df_ctx = slice_with_context(base_df, start, end, CTX_DAYS_BEFORE, CTX_DAYS_AFTER)
-
-if df_ctx.empty or len(df_ctx) < 8:  # ต้องการแท่งพอสมควรเพื่ออ่านคลื่นใหญ่
-    if USE_WEEKLY and AUTO_FALLBACK_TO_DAILY:
-        used_timeframe = "D"
-        base_df = df_all
-        df_ctx = slice_with_context(base_df, start, end, CTX_DAYS_BEFORE, CTX_DAYS_AFTER)
+if df_ctx.empty or len(df_ctx) < 20:
+    # ถ้าข้อมูลรายวันน้อยเกินไป ลองรีแซมเปิลเป็นรายสัปดาห์แทน
+    used_timeframe = "W"
+    base_df = resample_weekly(df_all)
+    df_ctx = slice_with_context(base_df, start, end, CTX_DAYS_BEFORE, CTX_DAYS_AFTER)
 
 if df_ctx.empty:
     raise ValueError(f"ช่วง {start} → {end} ไม่มีข้อมูล (TF={used_timeframe})")
 
 # ============================================================
-# [Layer 5] วิเคราะห์ (bias ไปทาง impulse top) + fallback no_swings
+# [Layer 5] วิเคราะห์ (bias ไปทาง impulse top) + ปรับความเข้มงวด
 # ============================================================
-min_swing = MIN_SWING_PCT_WEEKLY if used_timeframe == "W" else MIN_SWING_PCT_DAILY
+min_swing = MIN_SWING_PCT_DAILY if used_timeframe == "D" else MIN_SWING_PCT_WEEKLY
 waves_raw = run_analyzer(df_ctx, min_swing, STRICT_IMPULSE, ALLOW_OVERLAP)
 det = extract_detected(waves_raw)
 reason = get_debug_reason(det)
 
-# ถ้าไม่มีสวิง/ข้อมูลไม่พอ → ลดความเข้มงวดทีละขั้น
+# ถ้าข้อมูลยัง "no_swings" ให้ลดความเข้มงวดเล็กน้อย
 if "no_swings" in reason:
-    if used_timeframe == "W" and AUTO_FALLBACK_TO_DAILY:
-        used_timeframe = "D"
-        base_df = df_all
-        df_ctx = slice_with_context(base_df, start, end, CTX_DAYS_BEFORE, CTX_DAYS_AFTER)
-        waves_raw = run_analyzer(df_ctx, MIN_SWING_PCT_DAILY, STRICT_IMPULSE, ALLOW_OVERLAP)
-        det = extract_detected(waves_raw)
-        reason = get_debug_reason(det)
-    else:
-        # ลด min_swing ลงอีกนิด (แต่ไม่ต่ำกว่า 2%)
-        new_min = max(min_swing - 1.0, 2.0)
-        waves_raw = run_analyzer(df_ctx, new_min, STRICT_IMPULSE, ALLOW_OVERLAP)
-        det = extract_detected(waves_raw)
-        reason = get_debug_reason(det)
+    new_min = max(min_swing - 0.5, 2.5)  # ลดทีละ 0.5 แต่ไม่ต่ำกว่า 2.5
+    waves_raw = run_analyzer(df_ctx, new_min, STRICT_IMPULSE, ALLOW_OVERLAP)
+    det = extract_detected(waves_raw)
+    reason = get_debug_reason(det)
+    min_swing = new_min
 
 # ============================================================
 # [Layer 6] สรุปผลแบบ "ชนิดโครงสร้าง"
-#   - เป้าหมาย: ตรวจว่าเป็น "IMPULSE_TOP" (wave-5 end) ได้ไหม
 # ============================================================
 CORRECTION_PATTERNS = {"DOUBLE_THREE", "TRIPLE_THREE", "ZIGZAG", "FLAT", "EXPANDED_FLAT", "WXY", "WXYXZ"}
 IMPULSE_PATTERNS    = {"IMPULSE", "FIVE", "FIVE_WAVE", "IMPULSE_FIVE"}
 
 def classify_detected(det: dict) -> str:
-    # โครงสร้างทั่วไป
     pattern = str(det.get("pattern", "")).upper()
     completed = bool(det.get("completed", False))
     current = det.get("current", {}) or {}
@@ -180,26 +168,20 @@ def classify_detected(det: dict) -> str:
     stage = str(current.get("stage", "")).upper()
     next_dir = str(next_.get("direction", "")).lower()
 
-    # เป็น correction ชัด ๆ
     if pattern in CORRECTION_PATTERNS or "WXY" in stage or "CORRECTION" in stage:
         return "CORRECTION"
 
-    # เป็น impulse และ "มีนัยว่าถึงยอด/กำลังจะลง"
     if (pattern in IMPULSE_PATTERNS or "IMPULSE" in stage or "W5" in stage) and (
         completed or "TOP" in stage or "PEAK" in stage or next_dir == "down"
     ):
         return "IMPULSE_TOP"
 
-    # เป็น impulse แต่ยังไม่ยืนยันยอด
     if (pattern in IMPULSE_PATTERNS or "IMPULSE" in stage):
         return "IMPULSE_PROGRESS"
 
-    # ไม่แน่ใจ
     return "UNKNOWN"
 
 det_kind = classify_detected(det)
-
-# ตัดสินผล: เราคาดหวัง IMPULSE_TOP
 result = "✅ Correct" if det_kind == expected_kind else "❌ Incorrect"
 
 # ============================================================
@@ -212,7 +194,7 @@ summary = {
     "period": label,
     "expected_kind": expected_kind,
     "detected_kind": det_kind,
-    "detected_raw": det,   # เก็บตัวเต็มเพื่อดีบักภายหลัง
+    "detected_raw": det,
     "meta": {
         "timeframe": used_timeframe,
         "candles": int(len(df_ctx)),
@@ -234,7 +216,7 @@ with open(log_file, "w", encoding="utf-8") as f:
 # ============================================================
 # [Layer 8] แสดงผลบน Console
 # ============================================================
-print("== Elliott Wave Test (Impulse-Top mode) ==")
+print("== Elliott Wave Test (Impulse-Top mode / Daily TF) ==")
 print(f"Period        : {label}")
 print(f"Expected Kind : {expected_kind}")
 print(f"Detected Kind : {det_kind}")

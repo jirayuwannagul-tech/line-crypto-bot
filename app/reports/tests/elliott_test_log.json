@@ -44,5 +44,111 @@
             "candles": 31,
             "debug_reason": ""
         }
+    },
+    {
+        "period": "May 2021",
+        "expected_kind": "IMPULSE_TOP",
+        "detected_kind": "CORRECTION",
+        "detected_raw": {
+            "pattern": "DOUBLE_THREE",
+            "completed": false,
+            "current": {
+                "stage": "WXY_partial",
+                "direction": "side"
+            },
+            "next": {
+                "stage": "continue",
+                "direction": "side"
+            },
+            "targets": {},
+            "debug": {
+                "swings": [
+                    {
+                        "idx": 2,
+                        "timestamp": 191,
+                        "price": 64854.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 3,
+                        "timestamp": 192,
+                        "price": 46930.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 5,
+                        "timestamp": 194,
+                        "price": 59500.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 7,
+                        "timestamp": 196,
+                        "price": 30000.0,
+                        "type": "L"
+                    }
+                ]
+            }
+        },
+        "meta": {
+            "timeframe": "W",
+            "candles": 13,
+            "min_swing_pct": 6.0,
+            "debug_reason": "-"
+        },
+        "result": "❌ Incorrect"
+    },
+    {
+        "period": "May 2021",
+        "expected_kind": "IMPULSE_TOP",
+        "detected_kind": "CORRECTION",
+        "detected_raw": {
+            "pattern": "DOUBLE_THREE",
+            "completed": false,
+            "current": {
+                "stage": "WXY_partial",
+                "direction": "side"
+            },
+            "next": {
+                "stage": "continue",
+                "direction": "side"
+            },
+            "targets": {},
+            "debug": {
+                "swings": [
+                    {
+                        "idx": 2,
+                        "timestamp": 191,
+                        "price": 64854.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 3,
+                        "timestamp": 192,
+                        "price": 46930.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 5,
+                        "timestamp": 194,
+                        "price": 59500.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 7,
+                        "timestamp": 196,
+                        "price": 30000.0,
+                        "type": "L"
+                    }
+                ]
+            }
+        },
+        "meta": {
+            "timeframe": "W",
+            "candles": 13,
+            "min_swing_pct": 6.0,
+            "debug_reason": "-"
+        },
+        "result": "❌ Incorrect"
     }
 ]
