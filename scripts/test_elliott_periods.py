@@ -29,14 +29,31 @@ TEST_CASES = [
     ("Nov 2022", "2022-11-01", "2022-11-30", "CORRECTION"),
 ]
 
-# พารามิเตอร์ analyzer
-USE_WEEKLY = False
-MIN_SWING_PCT_DAILY  = 3.5
-MIN_SWING_PCT_WEEKLY = 6.0
+# === มาตรฐาน TF ที่จะรันทุกครั้ง ===
+TF_LIST = ["1D", "4H", "1H"]
+
+# พารามิเตอร์ analyzer (ค่าเริ่มต้น)
 STRICT_IMPULSE = True
 ALLOW_OVERLAP  = False
-CTX_DAYS_BEFORE = 60
-CTX_DAYS_AFTER  = 60
+
+# Min swing ต่อ TF (ปรับได้ตาม data/ความผันผวน)
+MIN_SWING_PCT = {
+    "1D": 3.5,   # เดิมที่ใช้อยู่
+    "4H": 2.0,
+    "1H": 1.2,
+}
+
+# ช่วง context ต่อ TF (ก่อน/หลังช่วงทดสอบ) — ใช้เป็น 'Xd' วัน
+CTX_BEFORE_DAYS = {
+    "1D": 60,
+    "4H": 45,
+    "1H": 30,
+}
+CTX_AFTER_DAYS = {
+    "1D": 60,
+    "4H": 30,
+    "1H": 21,
+}
 
 # ============================================================
 # [Layer 3] Helpers
@@ -70,7 +87,7 @@ def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
         raise KeyError(f"ไม่พบคอลัมน์วันที่ใน {cols}")
 
     out = df.rename(columns={date_col:"date"}).copy()
-    out["date"] = pd.to_datetime(out["date"])
+    out["date"] = pd.to_datetime(out["date"], utc=False, errors="coerce")
 
     for m in OHLC_MAPS:
         if len([k for k in m if k in out.columns]) >= 3:
@@ -80,19 +97,64 @@ def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
         out = out.rename(columns={"Adj Close":"close"})
 
     core = ["date","open","high","low","close"]
-    return out[core+[c for c in out.columns if c not in core]]
+    miss = [c for c in ["open","high","low","close"] if c not in out.columns]
+    if miss:
+        raise KeyError(f"ไม่เจอคอลัมน์ OHLC ครบถ้วน: missing={miss}")
 
-def slice_with_context(df, start, end, ctx_before, ctx_after):
-    s = pd.to_datetime(start) - timedelta(days=ctx_before)
-    e = pd.to_datetime(end)   + timedelta(days=ctx_after)
+    # เรียงเวลาและลบ NA
+    out = out.sort_values("date").dropna(subset=["date","open","high","low","close"]).reset_index(drop=True)
+
+    return out
+
+def resample_ohlc(df: pd.DataFrame, tf: str) -> pd.DataFrame:
+    """
+    Resample เป็น OHLC ตาม TF ที่กำหนด (1D/4H/1H)
+    - ถ้า TF=1D: ไม่ resample (ใช้เดิม)
+    - ถ้า TF=4H/1H: ต้องมีข้อมูลที่ละเอียดพอ (>= 1H) จึงจะ resample ได้
+    """
+    tf = tf.upper()
+    if tf == "1D":
+        return df.copy()
+
+    rule = {"4H": "4H", "1H": "1H"}[tf]
+    x = df.set_index("date")
+    # ตรวจสอบความละเอียดข้อมูลเดิม
+    if len(x) >= 3:
+        min_step = (x.index[1:] - x.index[:-1]).min()
+    else:
+        min_step = pd.Timedelta(days=9999)
+
+    # ถ้าข้อมูลหยาบเกินไป (เช่น daily) จะ resample ลง TF ที่เล็กกว่าไม่ได้ → คืน DataFrame ว่างเพื่อให้เทสต์ข้าม
+    if min_step > pd.Timedelta(hours=1) and tf in {"4H","1H"}:
+        return pd.DataFrame(columns=df.columns)
+
+    y = (
+        x.resample(rule)
+         .agg({"open":"first","high":"max","low":"min","close":"last"})
+         .dropna()
+         .reset_index()
+    )
+    return y
+
+def slice_with_context(df, start, end, tf: str):
+    """ตัดช่วงข้อมูลพร้อม context ก่อน/หลัง ตาม TF"""
+    start = pd.to_datetime(start)
+    end   = pd.to_datetime(end)
+    before_days = CTX_BEFORE_DAYS.get(tf, 30)
+    after_days  = CTX_AFTER_DAYS.get(tf, 21)
+    s = start - pd.Timedelta(days=before_days)
+    e = end   + pd.Timedelta(days=after_days)
     return df[(df["date"]>=s)&(df["date"]<=e)].copy()
 
 def run_analyzer(df_test, min_swing_pct, strict_impulse, allow_overlap):
+    # analyze_elliott เวอร์ชันปัจจุบันอาจไม่มีพารามิเตอร์เสริม → รองรับทั้งสองแบบ
     try:
-        return ew.analyze_elliott(df_test,
+        return ew.analyze_elliott(
+            df_test,
             min_swing_pct=min_swing_pct,
             strict_impulse=strict_impulse,
-            allow_overlap=allow_overlap)
+            allow_overlap=allow_overlap
+        )
     except TypeError:
         return ew.analyze_elliott(df_test)
 
@@ -103,6 +165,20 @@ def extract_detected(waves):
         return last if isinstance(last, dict) else {"label": str(last)}
     return {"label": str(waves) if waves is not None else "None"}
 
+def classify_kind(det: dict) -> str:
+    pattern = str(det.get("pattern","")).upper()
+    stage   = str(det.get("current",{}).get("stage","")).upper()
+    nextdir = str(det.get("next",{}).get("direction","")).lower()
+    completed = bool(det.get("completed", False))
+
+    if "IMPULSE" in pattern or "IMPULSE" in stage or "W5" in stage:
+        if completed or "TOP" in stage or nextdir == "down":
+            return "IMPULSE_TOP"
+        return "IMPULSE_PROGRESS"
+    if "CORRECTION" in stage or "WXY" in stage or pattern in {"DOUBLE_THREE","ZIGZAG","FLAT","TRIANGLE"}:
+        return "CORRECTION"
+    return "UNKNOWN"
+
 # ============================================================
 # [Layer 4] โหลดข้อมูล
 # ============================================================
@@ -110,60 +186,55 @@ df_all = load_df("app/data/historical.xlsx")
 df_all = normalize_df(df_all)
 
 # ============================================================
-# [Layer 5] รันทดสอบทีละ case
+# [Layer 5] รันทดสอบแบบวนทุก TF
 # ============================================================
 results = []
-for label, start, end, expected_kind in TEST_CASES:
-    used_tf = "D" if not USE_WEEKLY else "W"
-    base_df = df_all if used_tf=="D" else (
-        df_all.set_index("date").resample("W")
-             .agg({"open":"first","high":"max","low":"min","close":"last"})
-             .dropna().reset_index()
-    )
-    df_ctx = slice_with_context(base_df, start, end, CTX_DAYS_BEFORE, CTX_DAYS_AFTER)
 
-    if df_ctx.empty:
-        print(f"⚠️ {label} ไม่มีข้อมูล")
-        continue
-
-    min_swing = MIN_SWING_PCT_DAILY if used_tf=="D" else MIN_SWING_PCT_WEEKLY
-    waves_raw = run_analyzer(df_ctx, min_swing, STRICT_IMPULSE, ALLOW_OVERLAP)
-    det = extract_detected(waves_raw)
-
-    # classify
-    pattern = str(det.get("pattern","")).upper()
-    stage   = str(det.get("current",{}).get("stage","")).upper()
-    nextdir = str(det.get("next",{}).get("direction","")).lower()
-    completed = bool(det.get("completed", False))
-
-    if "IMPULSE" in pattern or "IMPULSE" in stage or "W5" in stage:
-        if completed or "TOP" in stage or nextdir=="down":
-            detected_kind = "IMPULSE_TOP"
-        else:
-            detected_kind = "IMPULSE_PROGRESS"
-    elif "CORRECTION" in stage or "WXY" in stage or pattern in {"DOUBLE_THREE","ZIGZAG","FLAT"}:
-        detected_kind = "CORRECTION"
+for tf in TF_LIST:
+    # เตรียม DataFrame ตาม TF
+    if tf == "1D":
+        base_df = df_all
     else:
-        detected_kind = "UNKNOWN"
+        base_df = resample_ohlc(df_all, tf)
+        if base_df.empty:
+            print(f"⚠️ ข้าม TF={tf} เพราะข้อมูลหยาบเกินไป (resample ไม่ได้)")
+            continue
 
-    result = "✅ Correct" if detected_kind==expected_kind else "❌ Incorrect"
-    summary = {
-        "period": label,
-        "expected_kind": expected_kind,
-        "detected_kind": detected_kind,
-        "detected_raw": det,
-        "meta": {"timeframe":used_tf,"candles":len(df_ctx),"min_swing_pct":min_swing},
-        "result": result
-    }
-    results.append(summary)
+    for label, start, end, expected_kind in TEST_CASES:
+        df_ctx = slice_with_context(base_df, start, end, tf)
+        if df_ctx.empty:
+            print(f"⚠️ {label} / TF={tf} ไม่มีข้อมูลพอในช่วงที่ขอ (รวม context)")
+            continue
 
-    print("== Elliott Wave Test ==")
-    print(f"Period        : {label}")
-    print(f"Expected Kind : {expected_kind}")
-    print(f"Detected Kind : {detected_kind}")
-    print(f"Result        : {result}")
-    print(f"Meta          : TF={used_tf}  candles={len(df_ctx)}  minSwing={min_swing}%")
-    print("-"*60)
+        min_swing = MIN_SWING_PCT.get(tf, 2.0)
+        waves_raw = run_analyzer(df_ctx, min_swing, STRICT_IMPULSE, ALLOW_OVERLAP)
+        det = extract_detected(waves_raw)
+
+        detected_kind = classify_kind(det)
+        result = "✅ Correct" if detected_kind == expected_kind else "❌ Incorrect"
+
+        summary = {
+            "period": label,
+            "expected_kind": expected_kind,
+            "detected_kind": detected_kind,
+            "detected_raw": det,
+            "meta": {
+                "timeframe": tf,
+                "candles": len(df_ctx),
+                "min_swing_pct": min_swing
+            },
+            "result": result
+        }
+        results.append(summary)
+
+        print("== Elliott Wave Test ==")
+        print(f"TF            : {tf}")
+        print(f"Period        : {label}")
+        print(f"Expected Kind : {expected_kind}")
+        print(f"Detected Kind : {detected_kind}")
+        print(f"Result        : {result}")
+        print(f"Meta          : TF={tf}  candles={len(df_ctx)}  minSwing={min_swing}%")
+        print("-"*60)
 
 # ============================================================
 # [Layer 6] Save logs
@@ -171,11 +242,18 @@ for label, start, end, expected_kind in TEST_CASES:
 os.makedirs("app/reports/tests", exist_ok=True)
 log_file = "app/reports/tests/elliott_test_log.json"
 if os.path.exists(log_file):
-    with open(log_file,"r",encoding="utf-8") as f: logs=json.load(f)
+    try:
+        with open(log_file,"r",encoding="utf-8") as f:
+            logs = json.load(f)
+            if not isinstance(logs, list):
+                logs = []
+    except Exception:
+        logs = []
 else:
-    logs=[]
+    logs = []
+
 logs.extend(results)
 with open(log_file,"w",encoding="utf-8") as f:
-    json.dump(logs,f,indent=4,ensure_ascii=False)
+    json.dump(logs, f, indent=4, ensure_ascii=False)
 
 print(f"✅ Saved all results to {log_file}")
