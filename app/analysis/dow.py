@@ -10,10 +10,10 @@
 #       คืนโครงสร้าง:
 #         {
 #           "trend": "UP" | "DOWN" | "SIDE",
+#           "trend_primary": "UP" | "DOWN" | "SIDE",   # ✅ เพิ่ม key นี้
 #           "rules": [...],
 #           "debug": {...}
 #         }
-#   - analyze_dow_rules(df, ...) -> dict (ทำงานกับ DataFrame โดยตรง)
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
@@ -89,10 +89,6 @@ def _coerce_to_df(
 # Utilities: หา swing highs/lows ด้วย fractals อย่างง่าย
 # -----------------------------------------------------------------------------
 def _pivots(df: pd.DataFrame, left: int = 2, right: int = 2) -> Tuple[pd.Series, pd.Series]:
-    """
-    คืนค่า (is_swing_high, is_swing_low) เป็น Series ของ boolean
-    ใช้วิธี fractal windows: จุดกลางสูง/ต่ำสุดเมื่อเทียบซ้าย/ขวา
-    """
     n = len(df)
     if n == 0:
         return pd.Series(dtype=bool, index=df.index), pd.Series(dtype=bool, index=df.index)
@@ -115,10 +111,6 @@ def _pivots(df: pd.DataFrame, left: int = 2, right: int = 2) -> Tuple[pd.Series,
 
 
 def _build_swings(df: pd.DataFrame, left: int = 2, right: int = 2) -> pd.DataFrame:
-    """
-    สร้าง DataFrame ของสวิงเรียงตามเวลา: ['idx','price','type'] โดย type ∈ {'H','L'}
-    บังคับให้สลับ H/L ถ้าชนกันติดกันจะเก็บค่าที่สุดโต่งกว่า
-    """
     is_sh, is_sl = _pivots(df, left=left, right=right)
     rows: List[Dict[str, object]] = []
     for i in range(len(df)):
@@ -137,11 +129,10 @@ def _build_swings(df: pd.DataFrame, left: int = 2, right: int = 2) -> pd.DataFra
         if not cleaned:
             cleaned.append(r); continue
         if cleaned[-1]["type"] == r["type"]:
-            # เก็บที่ "สุดโต่งกว่า"
             if r["type"] == "H":
                 if r["price"] >= cleaned[-1]["price"]:
                     cleaned[-1] = r
-            else:  # "L"
+            else:
                 if r["price"] <= cleaned[-1]["price"]:
                     cleaned[-1] = r
         else:
@@ -153,10 +144,6 @@ def _build_swings(df: pd.DataFrame, left: int = 2, right: int = 2) -> pd.DataFra
 # Core: Dow Theory RULES
 # -----------------------------------------------------------------------------
 def _extract_recent_sequence(sw: pd.DataFrame, need_points: int = 6) -> pd.DataFrame:
-    """
-    ดึงลำดับสวิงล่าสุดอย่างน้อย 6 จุด (H/L สลับกัน) สำหรับตรวจ HH/HL หรือ LH/LL
-    ถ้ามากพอจะคืน tail(need_points) มิฉะนั้นคืนทั้งชุด
-    """
     if len(sw) == 0:
         return sw
     tail = sw.tail(max(need_points, 3)).reset_index(drop=True)
@@ -169,12 +156,6 @@ def _extract_recent_sequence(sw: pd.DataFrame, need_points: int = 6) -> pd.DataF
 
 
 def _dow_rules_decision(win: pd.DataFrame) -> Tuple[Trend, List[Dict[str, object]]]:
-    """
-    ตัดสินแนวโน้มตามกฎ Dow:
-      - Uptrend: มี Higher High (HH) และ Higher Low (HL) ต่อเนื่อง
-      - Downtrend: มี Lower High (LH) และ Lower Low (LL) ต่อเนื่อง
-      - ไม่ชัด → SIDE
-    """
     rules: List[Dict[str, object]] = []
 
     highs = [r["price"] for r in win.to_dict("records") if r["type"] == "H"]
@@ -218,22 +199,20 @@ def analyze_dow_rules(
     pivot_right: int = 2,
     max_swings: int = 30,
 ) -> Dict[str, object]:
-    """
-    ตรวจแนวโน้มตามกฎ Dow Theory จาก OHLC DataFrame
-    ต้องมีคอลัมน์อย่างน้อย: ['high','low','close']
-    """
     needed = {"high", "low", "close"}
     if not needed.issubset(df.columns):
         return {
             "trend": "SIDE",
+            "trend_primary": "SIDE",  # ✅ เพิ่ม key สำหรับความเข้ากันได้
             "rules": [{"name": "missing_columns", "passed": False, "details": {"columns": list(df.columns)}}],
             "debug": {},
         }
 
     sw = _build_swings(df, left=pivot_left, right=pivot_right)
-    if len(sw) < 4:  # ต้องการอย่างน้อย H/L อย่างละ 2 ครั้งเพื่อเทียบก่อน-หลัง
+    if len(sw) < 4:
         return {
             "trend": "SIDE",
+            "trend_primary": "SIDE",
             "rules": [{"name": "insufficient_swings", "passed": False, "details": {"swings": len(sw)}}],
             "debug": {"swings": sw.to_dict("records")},
         }
@@ -246,6 +225,7 @@ def analyze_dow_rules(
 
     return {
         "trend": trend,
+        "trend_primary": trend,  # ✅ เพิ่ม field ที่ test ต้องการ
         "rules": rules,
         "debug": {
             "swings": sw.tail(12).to_dict("records"),
@@ -263,11 +243,6 @@ def analyze_dow(
     pivot_right: int = 2,
     max_swings: int = 30,
 ) -> Dict[str, object]:
-    """
-    Wrapper สะดวกใช้ที่ tests เรียก:
-      - รับ data หลากหลายรูปแบบ → แปลงเป็น DataFrame
-      - เรียกใช้ analyze_dow_rules แล้วคืนผลเดิม
-    """
     df = _coerce_to_df(data)
     return analyze_dow_rules(
         df,

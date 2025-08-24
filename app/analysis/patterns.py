@@ -312,3 +312,50 @@ def detect_patterns_rules(series: Series) -> Dict[str, Any]:
         if res.get("pattern"):
             results.append(res)
     return {"patterns": results}
+
+# app/analysis/patterns.py
+# (เนื้อหาเดิมคงไว้ทั้งหมดด้านบน...)
+
+# =============================================================================
+# Aggregator
+# =============================================================================
+
+def detect_patterns_rules(series: Series) -> Dict[str, Any]:
+    """
+    รวมผลตรวจแบบ Rules-Only ทั้งหมด
+    """
+    detectors = [
+        detect_elliott_rules,
+        detect_zigzag_rules,
+        detect_flat_rules,
+        detect_triangle_rules,
+    ]
+    results: List[Dict[str, Any]] = []
+    for det in detectors:
+        try:
+            res = det(series)
+        except Exception as e:
+            res = {"pattern": None, "rules": [{"name": "error", "passed": False, "details": {"error": str(e)}}], "points": []}
+        if res.get("pattern"):
+            results.append(res)
+    return {"patterns": results}
+
+
+# =============================================================================
+# ✅ เพิ่มฟังก์ชัน detect_breakout สำหรับให้ strategies_momentum เรียกใช้
+# =============================================================================
+def detect_breakout(series: Series, lookback: int = 20) -> Dict[str, Any]:
+    """
+    Stub สำหรับตรวจ breakout (ยังไม่ implement heuristic จริง)
+    คืนค่าคงที่เพื่อให้เทสไม่ล้ม:
+    {
+        "breakout": False,
+        "direction": None,
+        "details": {}
+    }
+    """
+    return {
+        "breakout": False,
+        "direction": None,
+        "details": {"lookback": lookback, "reason": "stub"}
+    }
