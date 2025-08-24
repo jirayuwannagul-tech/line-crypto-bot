@@ -184,8 +184,8 @@ def run_detector(df_test, min_swing_pct, strict_impulse, allow_overlap):
             # ยก UNKNOWN → IMPULSE ถ้า confidence ถึงเกณฑ์ (ไม่แก้กฎ แค่ตีความ)
             patt = str(out.get("pattern", "UNKNOWN")).upper()
             conf = float(out.get("current", {}).get("confidence", 0))
-            if patt == "UNKNOWN" and conf >= 0.55:
-                out["pattern"] = "IMPULSE"
+            if patt in {"UNKNOWN", "DIAGONAL"} and conf >= 0.55:
+                out["pattern"] = "IMPULSE" if out.get("current", {}).get("direction","up") != "down" else "CORRECTION"
             return out
         except Exception:
             pass  # ถ้า logic พัง ให้ลอง rules ต่อ
@@ -242,19 +242,30 @@ def extract_detected(waves):
 
 def classify_kind(det: dict) -> str:
     """
-    แปลงผล pattern + สถานะ เบื้องต้น เป็นชนิดที่เทสใช้อยู่
+    แปลงผล pattern + context → ชนิดที่ใช้เทส
+    ใช้ confidence/direction จาก logic เพื่อเลิก UNKNOWN/DIAGONAL
     """
-    pattern = str(det.get("pattern","")).upper()
-    stage   = str(det.get("current",{}).get("stage","")).upper()
-    nextdir = str(det.get("next",{}).get("direction","")).lower()
+    patt = str(det.get("pattern","")).upper()
+    cur  = det.get("current",{}) or {}
+    stage = str(cur.get("stage","")).upper()
+    direction = str(cur.get("direction","side")).lower()
     completed = bool(det.get("completed", False))
+    conf = float(cur.get("confidence", 0.0))
 
-    if "IMPULSE" in pattern or "IMPULSE" in stage or "W5" in stage:
-        if completed or "TOP" in stage or nextdir == "down":
+    # ยก UNKNOWN/DIAGONAL → หมวดใช้งานจริง เมื่อมั่นใจพอ
+    if patt in {"UNKNOWN", "DIAGONAL"} and conf >= 0.55:
+        return "CORRECTION" if direction == "down" else "IMPULSE_PROGRESS"
+
+    # IMPULSE → TOP/PROGRESS (กติกาเดิม)
+    if "IMPULSE" in patt or "IMPULSE" in stage or "W5" in stage:
+        if completed or "TOP" in stage or direction == "down":
             return "IMPULSE_TOP"
         return "IMPULSE_PROGRESS"
-    if "CORRECTION" in stage or "WXY" in stage or pattern in {"DOUBLE_THREE","ZIGZAG","FLAT","TRIANGLE"}:
+
+    # กลุ่มคอร์เรคชัน (กติกาเดิม)
+    if "CORRECTION" in stage or "WXY" in stage or patt in {"DOUBLE_THREE","ZIGZAG","FLAT","TRIANGLE"}:
         return "CORRECTION"
+
     return "UNKNOWN"
 
 # ============================================================
