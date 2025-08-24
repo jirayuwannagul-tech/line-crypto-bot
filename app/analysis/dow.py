@@ -26,6 +26,13 @@ Trend = Literal["UP", "DOWN", "SIDE"]
 
 __all__ = ["analyze_dow", "analyze_dow_rules", "Trend"]
 
+# --- Runtime logic markers (for runner logging only) ---
+LOGIC_VERSION = "dow-2025-08-25-a"
+def _logic_fingerprint():
+    import inspect, hashlib
+    src = inspect.getsource(analyze_dow_rules)
+    return hashlib.md5(src.encode()).hexdigest()
+
 # -----------------------------------------------------------------------------
 # Coercion: แปลง input ให้เป็น DataFrame ที่มีคอลัมน์อย่างน้อย: high/low/close
 # -----------------------------------------------------------------------------
