@@ -76,8 +76,18 @@ if df_test.empty:
     raise ValueError(f"ช่วง {start} → {end} ไม่มีข้อมูลในไฟล์")
 
 # [Layer 5] รัน Elliott Analyzer
+# [Layer 5] รัน Elliott Analyzer
 waves = ew.analyze_elliott(df_test)
-detected = waves[-1]["label"] if waves else "None"
+
+# ตรวจสอบผลลัพธ์จาก analyzer
+if isinstance(waves, list) and len(waves) > 0:
+    last = waves[-1]
+    detected = last["label"] if isinstance(last, dict) and "label" in last else str(last)
+elif isinstance(waves, dict):
+    detected = waves.get("label") or str(waves)
+else:
+    detected = str(waves)
+
 
 # [Layer 6] สรุปผล
 result = "✅ Correct" if (detected and expected.lower() in str(detected).lower()) else "❌ Incorrect"

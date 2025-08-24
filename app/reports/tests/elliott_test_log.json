@@ -1,0 +1,8 @@
+[
+    {
+        "period": "May 2021",
+        "expected": "wave 5 end",
+        "detected": "{'pattern': 'DOUBLE_THREE', 'completed': False, 'current': {'stage': 'WXY_partial', 'direction': 'side'}, 'next': {'stage': 'continue', 'direction': 'side'}, 'targets': {}, 'debug': {'swings': [{'idx': 2, 'timestamp': 1355, 'price': 58981.44, 'type': 'H'}, {'idx': 4, 'timestamp': 1357, 'price': 52900.0, 'type': 'L'}, {'idx': 7, 'timestamp': 1360, 'price': 59500.0, 'type': 'H'}, {'idx': 18, 'timestamp': 1371, 'price': 30000.0, 'type': 'L'}, {'idx': 25, 'timestamp': 1378, 'price': 40841.0, 'type': 'H'}]}}",
+        "result": "❌ Incorrect"
+    }
+]
