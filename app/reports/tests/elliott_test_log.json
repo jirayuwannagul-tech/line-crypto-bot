@@ -150,5 +150,960 @@
             "debug_reason": "-"
         },
         "result": "❌ Incorrect"
+    },
+    {
+        "period": "May 2021",
+        "expected_kind": "IMPULSE_TOP",
+        "detected_kind": "IMPULSE_TOP",
+        "detected_raw": {
+            "pattern": "DIAGONAL",
+            "completed": true,
+            "current": {
+                "stage": "impulse_5_complete",
+                "direction": "down"
+            },
+            "next": {
+                "stage": "corrective_A_down",
+                "direction": "down"
+            },
+            "targets": {
+                "post_impulse_retrace_38.2%": 31833.5227,
+                "post_impulse_retrace_50%": 32622.925,
+                "post_impulse_retrace_61.8%": 33412.3273
+            },
+            "debug": {
+                "swings": [
+                    {
+                        "idx": 105,
+                        "timestamp": 1398,
+                        "price": 41330.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 112,
+                        "timestamp": 1405,
+                        "price": 28805.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 115,
+                        "timestamp": 1408,
+                        "price": 35500.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 116,
+                        "timestamp": 1409,
+                        "price": 30151.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 119,
+                        "timestamp": 1412,
+                        "price": 36600.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 122,
+                        "timestamp": 1415,
+                        "price": 32699.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 124,
+                        "timestamp": 1417,
+                        "price": 35967.85,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 128,
+                        "timestamp": 1421,
+                        "price": 32077.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 132,
+                        "timestamp": 1425,
+                        "price": 34678.43,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 136,
+                        "timestamp": 1429,
+                        "price": 31020.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 138,
+                        "timestamp": 1431,
+                        "price": 32435.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 140,
+                        "timestamp": 1433,
+                        "price": 29278.0,
+                        "type": "L"
+                    }
+                ],
+                "window_indices": [
+                    124,
+                    128,
+                    132,
+                    136,
+                    138,
+                    140
+                ],
+                "window_types": [
+                    "H",
+                    "L",
+                    "H",
+                    "L",
+                    "H",
+                    "L"
+                ],
+                "window_prices": [
+                    35967.85,
+                    32077.0,
+                    34678.43,
+                    31020.0,
+                    32435.0,
+                    29278.0
+                ],
+                "overlap": true,
+                "legs": {
+                    "w1": 3890.8499999999985,
+                    "w2": 2601.4300000000003,
+                    "w3": 3658.4300000000003,
+                    "w4": 1415.0,
+                    "w5": 3157.0
+                }
+            }
+        },
+        "meta": {
+            "timeframe": "D",
+            "candles": 151,
+            "min_swing_pct": 3.5,
+            "debug_reason": "-"
+        },
+        "result": "✅ Correct"
+    },
+    {
+        "period": "May 2021",
+        "expected_kind": "IMPULSE_TOP",
+        "detected_kind": "IMPULSE_TOP",
+        "detected_raw": {
+            "pattern": "DIAGONAL",
+            "completed": true,
+            "current": {
+                "stage": "impulse_5_complete",
+                "direction": "down"
+            },
+            "next": {
+                "stage": "corrective_A_down",
+                "direction": "down"
+            },
+            "targets": {
+                "post_impulse_retrace_38.2%": 31833.5227,
+                "post_impulse_retrace_50%": 32622.925,
+                "post_impulse_retrace_61.8%": 33412.3273
+            },
+            "debug": {
+                "swings": [
+                    {
+                        "idx": 105,
+                        "timestamp": 1398,
+                        "price": 41330.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 112,
+                        "timestamp": 1405,
+                        "price": 28805.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 115,
+                        "timestamp": 1408,
+                        "price": 35500.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 116,
+                        "timestamp": 1409,
+                        "price": 30151.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 119,
+                        "timestamp": 1412,
+                        "price": 36600.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 122,
+                        "timestamp": 1415,
+                        "price": 32699.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 124,
+                        "timestamp": 1417,
+                        "price": 35967.85,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 128,
+                        "timestamp": 1421,
+                        "price": 32077.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 132,
+                        "timestamp": 1425,
+                        "price": 34678.43,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 136,
+                        "timestamp": 1429,
+                        "price": 31020.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 138,
+                        "timestamp": 1431,
+                        "price": 32435.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 140,
+                        "timestamp": 1433,
+                        "price": 29278.0,
+                        "type": "L"
+                    }
+                ],
+                "window_indices": [
+                    124,
+                    128,
+                    132,
+                    136,
+                    138,
+                    140
+                ],
+                "window_types": [
+                    "H",
+                    "L",
+                    "H",
+                    "L",
+                    "H",
+                    "L"
+                ],
+                "window_prices": [
+                    35967.85,
+                    32077.0,
+                    34678.43,
+                    31020.0,
+                    32435.0,
+                    29278.0
+                ],
+                "overlap": true,
+                "legs": {
+                    "w1": 3890.8499999999985,
+                    "w2": 2601.4300000000003,
+                    "w3": 3658.4300000000003,
+                    "w4": 1415.0,
+                    "w5": 3157.0
+                }
+            }
+        },
+        "meta": {
+            "timeframe": "D",
+            "candles": 151,
+            "min_swing_pct": 3.5,
+            "debug_reason": "-"
+        },
+        "result": "✅ Correct"
+    },
+    {
+        "period": "May 2021",
+        "expected_kind": "IMPULSE_TOP",
+        "detected_kind": "IMPULSE_TOP",
+        "detected_raw": {
+            "pattern": "DIAGONAL",
+            "completed": true,
+            "current": {
+                "stage": "impulse_5_complete",
+                "direction": "down"
+            },
+            "next": {
+                "stage": "corrective_A_down",
+                "direction": "down"
+            },
+            "targets": {
+                "post_impulse_retrace_38.2%": 31833.5227,
+                "post_impulse_retrace_50%": 32622.925,
+                "post_impulse_retrace_61.8%": 33412.3273
+            },
+            "debug": {
+                "swings": [
+                    {
+                        "idx": 105,
+                        "timestamp": 1398,
+                        "price": 41330.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 112,
+                        "timestamp": 1405,
+                        "price": 28805.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 115,
+                        "timestamp": 1408,
+                        "price": 35500.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 116,
+                        "timestamp": 1409,
+                        "price": 30151.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 119,
+                        "timestamp": 1412,
+                        "price": 36600.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 122,
+                        "timestamp": 1415,
+                        "price": 32699.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 124,
+                        "timestamp": 1417,
+                        "price": 35967.85,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 128,
+                        "timestamp": 1421,
+                        "price": 32077.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 132,
+                        "timestamp": 1425,
+                        "price": 34678.43,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 136,
+                        "timestamp": 1429,
+                        "price": 31020.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 138,
+                        "timestamp": 1431,
+                        "price": 32435.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 140,
+                        "timestamp": 1433,
+                        "price": 29278.0,
+                        "type": "L"
+                    }
+                ],
+                "window_indices": [
+                    124,
+                    128,
+                    132,
+                    136,
+                    138,
+                    140
+                ],
+                "window_types": [
+                    "H",
+                    "L",
+                    "H",
+                    "L",
+                    "H",
+                    "L"
+                ],
+                "window_prices": [
+                    35967.85,
+                    32077.0,
+                    34678.43,
+                    31020.0,
+                    32435.0,
+                    29278.0
+                ],
+                "overlap": true,
+                "legs": {
+                    "w1": 3890.8499999999985,
+                    "w2": 2601.4300000000003,
+                    "w3": 3658.4300000000003,
+                    "w4": 1415.0,
+                    "w5": 3157.0
+                }
+            }
+        },
+        "meta": {
+            "timeframe": "D",
+            "candles": 151,
+            "min_swing_pct": 3.5,
+            "debug_reason": "-"
+        },
+        "result": "✅ Correct"
+    },
+    {
+        "period": "May 2021",
+        "expected_kind": "IMPULSE_TOP",
+        "detected_kind": "IMPULSE_TOP",
+        "detected_raw": {
+            "pattern": "DIAGONAL",
+            "completed": true,
+            "current": {
+                "stage": "impulse_5_complete",
+                "direction": "down"
+            },
+            "next": {
+                "stage": "corrective_A_down",
+                "direction": "down"
+            },
+            "targets": {
+                "post_impulse_retrace_38.2%": 31833.5227,
+                "post_impulse_retrace_50%": 32622.925,
+                "post_impulse_retrace_61.8%": 33412.3273
+            },
+            "debug": {
+                "swings": [
+                    {
+                        "idx": 105,
+                        "timestamp": 1398,
+                        "price": 41330.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 112,
+                        "timestamp": 1405,
+                        "price": 28805.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 115,
+                        "timestamp": 1408,
+                        "price": 35500.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 116,
+                        "timestamp": 1409,
+                        "price": 30151.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 119,
+                        "timestamp": 1412,
+                        "price": 36600.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 122,
+                        "timestamp": 1415,
+                        "price": 32699.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 124,
+                        "timestamp": 1417,
+                        "price": 35967.85,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 128,
+                        "timestamp": 1421,
+                        "price": 32077.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 132,
+                        "timestamp": 1425,
+                        "price": 34678.43,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 136,
+                        "timestamp": 1429,
+                        "price": 31020.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 138,
+                        "timestamp": 1431,
+                        "price": 32435.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 140,
+                        "timestamp": 1433,
+                        "price": 29278.0,
+                        "type": "L"
+                    }
+                ],
+                "window_indices": [
+                    124,
+                    128,
+                    132,
+                    136,
+                    138,
+                    140
+                ],
+                "window_types": [
+                    "H",
+                    "L",
+                    "H",
+                    "L",
+                    "H",
+                    "L"
+                ],
+                "window_prices": [
+                    35967.85,
+                    32077.0,
+                    34678.43,
+                    31020.0,
+                    32435.0,
+                    29278.0
+                ],
+                "overlap": true,
+                "legs": {
+                    "w1": 3890.8499999999985,
+                    "w2": 2601.4300000000003,
+                    "w3": 3658.4300000000003,
+                    "w4": 1415.0,
+                    "w5": 3157.0
+                }
+            }
+        },
+        "meta": {
+            "timeframe": "D",
+            "candles": 151,
+            "min_swing_pct": 3.5
+        },
+        "result": "✅ Correct"
+    },
+    {
+        "period": "Nov 2021",
+        "expected_kind": "IMPULSE_TOP",
+        "detected_kind": "IMPULSE_TOP",
+        "detected_raw": {
+            "pattern": "IMPULSE",
+            "completed": true,
+            "current": {
+                "stage": "impulse_5_complete",
+                "direction": "down"
+            },
+            "next": {
+                "stage": "corrective_A_down",
+                "direction": "down"
+            },
+            "targets": {
+                "post_impulse_retrace_38.2%": 38942.33218,
+                "post_impulse_retrace_50%": 40003.505000000005,
+                "post_impulse_retrace_61.8%": 41064.67782
+            },
+            "debug": {
+                "swings": [
+                    {
+                        "idx": 89,
+                        "timestamp": 1566,
+                        "price": 59176.99,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 93,
+                        "timestamp": 1570,
+                        "price": 42000.3,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 96,
+                        "timestamp": 1573,
+                        "price": 51936.33,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 106,
+                        "timestamp": 1583,
+                        "price": 45456.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 116,
+                        "timestamp": 1593,
+                        "price": 52088.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 130,
+                        "timestamp": 1607,
+                        "price": 39650.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 133,
+                        "timestamp": 1610,
+                        "price": 44500.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 134,
+                        "timestamp": 1611,
+                        "price": 41725.95,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 140,
+                        "timestamp": 1617,
+                        "price": 43505.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 144,
+                        "timestamp": 1621,
+                        "price": 32917.17,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 146,
+                        "timestamp": 1623,
+                        "price": 38919.98,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 147,
+                        "timestamp": 1624,
+                        "price": 35507.01,
+                        "type": "L"
+                    }
+                ],
+                "window_indices": [
+                    133,
+                    134,
+                    140,
+                    144,
+                    146,
+                    147
+                ],
+                "window_types": [
+                    "H",
+                    "L",
+                    "H",
+                    "L",
+                    "H",
+                    "L"
+                ],
+                "window_prices": [
+                    44500.0,
+                    41725.95,
+                    43505.0,
+                    32917.17,
+                    38919.98,
+                    35507.01
+                ],
+                "overlap": false,
+                "legs": {
+                    "w1": 2774.050000000003,
+                    "w2": 1779.050000000003,
+                    "w3": 10587.830000000002,
+                    "w4": 6002.810000000005,
+                    "w5": 3412.970000000001
+                }
+            }
+        },
+        "meta": {
+            "timeframe": "D",
+            "candles": 150,
+            "min_swing_pct": 3.5
+        },
+        "result": "✅ Correct"
+    },
+    {
+        "period": "Jun 2022",
+        "expected_kind": "CORRECTION",
+        "detected_kind": "IMPULSE_TOP",
+        "detected_raw": {
+            "pattern": "DIAGONAL",
+            "completed": true,
+            "current": {
+                "stage": "impulse_5_complete",
+                "direction": "up"
+            },
+            "next": {
+                "stage": "corrective_A",
+                "direction": "up"
+            },
+            "targets": {
+                "post_impulse_retrace_38.2%": 21709.0,
+                "post_impulse_retrace_50%": 21650.0,
+                "post_impulse_retrace_61.8%": 21591.0
+            },
+            "debug": {
+                "swings": [
+                    {
+                        "idx": 92,
+                        "timestamp": 1781,
+                        "price": 18781.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 97,
+                        "timestamp": 1786,
+                        "price": 22527.37,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 102,
+                        "timestamp": 1791,
+                        "price": 18910.94,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 109,
+                        "timestamp": 1798,
+                        "price": 24276.74,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 115,
+                        "timestamp": 1804,
+                        "price": 20706.5,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 119,
+                        "timestamp": 1808,
+                        "price": 24668.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 124,
+                        "timestamp": 1813,
+                        "price": 22400.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 128,
+                        "timestamp": 1817,
+                        "price": 24245.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 130,
+                        "timestamp": 1819,
+                        "price": 22664.69,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 135,
+                        "timestamp": 1824,
+                        "price": 25211.32,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 140,
+                        "timestamp": 1829,
+                        "price": 20761.9,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 144,
+                        "timestamp": 1833,
+                        "price": 21900.0,
+                        "type": "H"
+                    }
+                ],
+                "window_indices": [
+                    124,
+                    128,
+                    130,
+                    135,
+                    140,
+                    144
+                ],
+                "window_types": [
+                    "L",
+                    "H",
+                    "L",
+                    "H",
+                    "L",
+                    "H"
+                ],
+                "window_prices": [
+                    22400.0,
+                    24245.0,
+                    22664.69,
+                    25211.32,
+                    20761.9,
+                    21900.0
+                ],
+                "overlap": true,
+                "legs": {
+                    "w1": 1845.0,
+                    "w2": 1580.3100000000013,
+                    "w3": 2546.630000000001,
+                    "w4": 4449.419999999998,
+                    "w5": 1138.0999999999985
+                }
+            }
+        },
+        "meta": {
+            "timeframe": "D",
+            "candles": 150,
+            "min_swing_pct": 3.5
+        },
+        "result": "❌ Incorrect"
+    },
+    {
+        "period": "Aug 2022",
+        "expected_kind": "CORRECTION",
+        "detected_kind": "IMPULSE_TOP",
+        "detected_raw": {
+            "pattern": "DIAGONAL",
+            "completed": true,
+            "current": {
+                "stage": "impulse_5_complete",
+                "direction": "down"
+            },
+            "next": {
+                "stage": "corrective_A_down",
+                "direction": "down"
+            },
+            "targets": {
+                "post_impulse_retrace_38.2%": 20181.50562,
+                "post_impulse_retrace_50%": 20237.545,
+                "post_impulse_retrace_61.8%": 20293.58438
+            },
+            "debug": {
+                "swings": [
+                    {
+                        "idx": 111,
+                        "timestamp": 1861,
+                        "price": 19956.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 111,
+                        "timestamp": 1861,
+                        "price": 18125.98,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 117,
+                        "timestamp": 1867,
+                        "price": 20385.86,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 118,
+                        "timestamp": 1868,
+                        "price": 18471.28,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 120,
+                        "timestamp": 1870,
+                        "price": 20185.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 122,
+                        "timestamp": 1872,
+                        "price": 18920.35,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 124,
+                        "timestamp": 1874,
+                        "price": 20475.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 133,
+                        "timestamp": 1883,
+                        "price": 18190.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 134,
+                        "timestamp": 1884,
+                        "price": 19951.87,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 141,
+                        "timestamp": 1891,
+                        "price": 18650.0,
+                        "type": "L"
+                    },
+                    {
+                        "idx": 146,
+                        "timestamp": 1896,
+                        "price": 21020.0,
+                        "type": "H"
+                    },
+                    {
+                        "idx": 148,
+                        "timestamp": 1898,
+                        "price": 20000.09,
+                        "type": "L"
+                    }
+                ],
+                "window_indices": [
+                    124,
+                    133,
+                    134,
+                    141,
+                    146,
+                    148
+                ],
+                "window_types": [
+                    "H",
+                    "L",
+                    "H",
+                    "L",
+                    "H",
+                    "L"
+                ],
+                "window_prices": [
+                    20475.0,
+                    18190.0,
+                    19951.87,
+                    18650.0,
+                    21020.0,
+                    20000.09
+                ],
+                "overlap": true,
+                "legs": {
+                    "w1": 2285.0,
+                    "w2": 1761.869999999999,
+                    "w3": 1301.869999999999,
+                    "w4": 2370.0,
+                    "w5": 1019.9099999999999
+                }
+            }
+        },
+        "meta": {
+            "timeframe": "D",
+            "candles": 151,
+            "min_swing_pct": 3.5
+        },
+        "result": "❌ Incorrect"
     }
 ]
