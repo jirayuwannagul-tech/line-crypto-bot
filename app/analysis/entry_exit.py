@@ -14,7 +14,7 @@ import math
 import pandas as pd
 
 # ✅ FIX IMPORT: ใช้ absolute import ป้องกัน ModuleNotFoundError
-from app.analysis.scenarios import analyze_scenarios
+from app.logic.scenarios import analyze_scenarios
 from app.analysis.indicators import apply_indicators
 
 __all__ = ["suggest_trade", "format_trade_text"]
