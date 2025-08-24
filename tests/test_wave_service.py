@@ -1,12 +1,12 @@
 # tests/test_wave_service.py
 import pytest
+import pandas as pd
 from app.services.wave_service import analyze_wave, build_brief_message
 
 def test_analyze_wave_neutral_when_no_data(monkeypatch):
-    # mock get_data ให้คืน DataFrame ว่าง
-    import pandas as pd
-    from app import analysis
-    monkeypatch.setattr(analysis.timeframes, "get_data", lambda *a, **kw: pd.DataFrame())
+    # mock ให้ get_data คืน DataFrame ว่าง
+    monkeypatch.setattr("app.services.wave_service.get_data", lambda *a, **kw: pd.DataFrame())
+
     payload = analyze_wave("BTCUSDT", "1D")
     assert "percent" in payload
     assert payload["percent"]["up"] + payload["percent"]["down"] + payload["percent"]["side"] == 100
