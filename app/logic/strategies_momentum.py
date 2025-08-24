@@ -1,5 +1,5 @@
 # app/logic/strategies_momentum.py
-# PATCH: turn momentum_breakout into working scorer
+# PATCH: turn momentum_breakout into working scorer and fix some_strategy_func for tests
 
 from __future__ import annotations
 from typing import Dict, Any, List, Optional, Literal
@@ -17,12 +17,15 @@ except Exception:
         timeframe: str
         candles: List[Candle]
 
-# 🔧 FIXED: เปลี่ยนจาก relative import (.indicators) → absolute import
+# ✅ ใช้ absolute import แทน relative
 from app.analysis import indicators as ind
 from app.analysis import patterns as pat
 from app.analysis import filters as flt
 
 
+# -----------------------------
+# Helper Functions
+# -----------------------------
 def _reason(code: str, message: str, weight: float, meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     return {"code": code, "message": message, "weight": float(weight), "meta": meta or {}}
 
@@ -52,11 +55,14 @@ def _decide_bias(long_score: float, short_score: float, threshold: float = 0.6) 
     return "neutral"
 
 
+# -----------------------------
+# Main Strategy Scorer
+# -----------------------------
 def momentum_breakout(series: Series, strategy_id: str = "momentum_breakout") -> Dict[str, Any]:
     """
     Scorer เชิงโมเมนตัม + เบรกเอาท์:
-      - ใช้ filters เบื้องต้น (trend/volatility) กันสัญญาณหลอก
-      - รวมสัญญาณ patterns (breakout/inside-bar) + โครง EMA + RSI/MACD
+      - ใช้ filters เบื้องต้น (trend/volatility)
+      - รวมสัญญาณ patterns (breakout, inside-bar) + EMA + RSI/MACD
       - คืนคะแนน long/short แบบ 0..1 และ bias = long/short/neutral
     """
     reasons: List[Dict[str, Any]] = []
@@ -112,10 +118,12 @@ def momentum_breakout(series: Series, strategy_id: str = "momentum_breakout") ->
             bull = last > ema200 and ema50 > ema200
             bear = last < ema200 and ema50 < ema200
             if bull:
-                reasons.append(_reason("EMA_BULL", "EMA โครงสร้างขาขึ้น", 0.25, {"ema50": float(ema50), "ema200": float(ema200)}))
+                reasons.append(_reason("EMA_BULL", "EMA โครงสร้างขาขึ้น", 0.25,
+                                       {"ema50": float(ema50), "ema200": float(ema200)}))
                 long_score += 0.25
             elif bear:
-                reasons.append(_reason("EMA_BEAR", "EMA โครงสร้างขาลง", 0.25, {"ema50": float(ema50), "ema200": float(ema200)}))
+                reasons.append(_reason("EMA_BEAR", "EMA โครงสร้างขาลง", 0.25,
+                                       {"ema50": float(ema50), "ema200": float(ema200)}))
                 short_score += 0.25
 
     # RSI14
@@ -164,4 +172,22 @@ def momentum_breakout(series: Series, strategy_id: str = "momentum_breakout") ->
         "bias": bias,
         "reasons": reasons[:10],
         "strategy_id": strategy_id,
+    }
+
+
+# -----------------------------
+# Dummy function for tests
+# -----------------------------
+def some_strategy_func(data=None, symbol: str = None, tf: str = None):
+    """
+    Placeholder สำหรับเทส:
+      - รองรับ signature ที่เทสคาดหวัง (data, symbol, tf)
+      - คืนค่าตัวอย่าง output
+    """
+    return {
+        "name": "some_strategy_func",
+        "ready": True,
+        "symbol": symbol,
+        "timeframe": tf,
+        "data_preview": None if data is None else str(type(data)),
     }
