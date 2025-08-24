@@ -1,9 +1,11 @@
 # app/analysis/indicators.py
 # =============================================================================
-# Technical Indicators
+# Technical Indicators — RULES / FORMULAS ONLY
 # -----------------------------------------------------------------------------
-# รวมอินดิเคเตอร์หลักที่ใช้ในระบบ:
-# EMA, RSI, MACD, ADX, Stochastic, Volume metrics
+# เวอร์ชันนี้มีเฉพาะ "การคำนวณ" ของอินดิเคเตอร์มาตรฐาน:
+# EMA, RSI (Wilder), MACD, ADX(+DI/-DI), Stochastic %K/%D, Volume MA & Z-score
+# - ไม่มี heuristic / ไม่มีเกณฑ์ตีความ (เช่น buy/sell, overbought/oversold)
+# - ไม่มีเงื่อนไขตัดสินใจอื่น ๆ
 # =============================================================================
 from __future__ import annotations
 
@@ -26,6 +28,7 @@ __all__ = [
 # EMA
 # =============================================================================
 def ema(series: pd.Series, period: int) -> pd.Series:
+    """Exponential Moving Average (EMA)."""
     series = pd.to_numeric(series, errors="coerce")
     return series.ewm(span=period, adjust=False, min_periods=period).mean()
 
@@ -33,6 +36,7 @@ def ema(series: pd.Series, period: int) -> pd.Series:
 # RSI (Wilder's smoothing)
 # =============================================================================
 def rsi(close: pd.Series, period: int = 14) -> pd.Series:
+    """Relative Strength Index (RSI) ด้วย Wilder smoothing."""
     close = pd.to_numeric(close, errors="coerce")
     delta = close.diff()
 
@@ -55,6 +59,10 @@ def macd(
     slow: int = 26,
     signal: int = 9
 ) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    """
+    Moving Average Convergence Divergence (MACD).
+    คืนค่า: (macd_line, signal_line, histogram)
+    """
     close = pd.to_numeric(close, errors="coerce")
     ema_fast = ema(close, fast)
     ema_slow = ema(close, slow)
@@ -72,6 +80,10 @@ def adx(
     close: pd.Series,
     period: int = 14
 ) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    """
+    Average Directional Index (ADX) พร้อม +DI / -DI (Wilder smoothing)
+    คืนค่า: (adx, plus_di, minus_di)
+    """
     high = pd.to_numeric(high, errors="coerce")
     low = pd.to_numeric(low, errors="coerce")
     close = pd.to_numeric(close, errors="coerce")
@@ -109,6 +121,10 @@ def stoch_kd(
     d: int = 3,
     smooth: int = 3
 ) -> Tuple[pd.Series, pd.Series]:
+    """
+    Stochastic Oscillator: %K และ %D
+    คืนค่า: (%K_smooth, %D)
+    """
     high = pd.to_numeric(high, errors="coerce")
     low = pd.to_numeric(low, errors="coerce")
     close = pd.to_numeric(close, errors="coerce")
@@ -123,9 +139,13 @@ def stoch_kd(
     return k_smooth.clip(0, 100), d_line.clip(0, 100)
 
 # =============================================================================
-# Volume metrics
+# Volume metrics (MA & Z-score)
 # =============================================================================
 def volume_metrics(volume: pd.Series, window: int = 20) -> Tuple[pd.Series, pd.Series]:
+    """
+    Volume moving average และ Z-score ของปริมาณการซื้อขาย
+    คืนค่า: (vol_ma, vol_z)
+    """
     volume = pd.to_numeric(volume, errors="coerce")
     vol_ma = volume.rolling(window, min_periods=window).mean()
     vol_std = volume.rolling(window, min_periods=window).std()
@@ -133,15 +153,15 @@ def volume_metrics(volume: pd.Series, window: int = 20) -> Tuple[pd.Series, pd.S
     return vol_ma, z
 
 # =============================================================================
-# Apply indicators bundle
+# Apply indicators bundle (pure calculations only)
 # =============================================================================
 def apply_indicators(
     df: pd.DataFrame,
     cfg: Optional[Dict] = None
 ) -> pd.DataFrame:
     """
-    เติมอินดิเคเตอร์หลักลง DataFrame ที่มีคอลัมน์ high,low,close,volume
-    คืน DataFrame ใหม่ (ไม่แก้ของเดิม)
+    เติมค่าอินดิเคเตอร์ลง DataFrame (คำนวณอย่างเดียว ไม่มีการตีความ)
+    ต้องมีคอลัมน์: high, low, close, volume
     """
     cfg = cfg or {}
     df = df.copy()
