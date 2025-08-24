@@ -9,6 +9,18 @@ from __future__ import annotations
 from typing import Dict, Any, Optional
 import pandas as pd
 
+# ⬇️ เพิ่ม: ใช้โมเมนตัมแบบ regime+ATR gate (เลเยอร์ LOGIC เท่านั้น)
+try:
+    from app.logic.strategies_momentum import (
+        MomentumConfig,
+        momentum_signal_series,
+        momentum_last_signal,
+    )
+except Exception:
+    MomentumConfig = None  # type: ignore
+    momentum_signal_series = None  # type: ignore
+    momentum_last_signal = None  # type: ignore
+
 
 # -----------------------------
 # Strategy Example: Moving Average Cross
@@ -90,3 +102,34 @@ def some_strategy_func(data=None, symbol: str = None, tf: str = None) -> Dict[st
         "short_score": 0.0,      # ✅ เพิ่มคะแนนจำลอง
         "data_preview": None if data is None else str(type(data)),
     }
+
+
+# -----------------------------
+# 🔧 เพิ่ม: โมเมนตัมไฟนอลจาก Series (Regime + ATR gate + Debounce)
+# -----------------------------
+def momentum_trend(series: Dict[str, Any], cfg: Optional[MomentumConfig] = None) -> Dict[str, Any]:
+    """
+    ใช้สัญญาณโมเมนตัมแบบ logic-layer:
+    - คืน trend = 'UP'|'DOWN'|'SIDE'
+    - map เป็น bias: long/short/neutral สำหรับ engine ที่ต้องการรูปแบบนี้
+    """
+    if momentum_last_signal is None:
+        # Fallback กรณี import ไม่ได้
+        return {"trend": "SIDE", "bias": "neutral"}
+
+    cfg = cfg or MomentumConfig()  # type: ignore
+    trend = momentum_last_signal(series, cfg)  # 'UP'|'DOWN'|'SIDE'
+    bias = "long" if trend == "UP" else "short" if trend == "DOWN" else "neutral"
+    return {"trend": trend, "bias": bias}
+
+
+def momentum_trend_series(series: Dict[str, Any], cfg: Optional[MomentumConfig] = None) -> Dict[str, Any]:
+    """
+    คืนทั้งซีรีส์ของสัญญาณโมเมนตัม (ต่อแท่ง) เพื่อใช้งานใน backtest/report
+    """
+    if momentum_signal_series is None:
+        return {"signals": []}
+
+    cfg = cfg or MomentumConfig()  # type: ignore
+    sigs = momentum_signal_series(series, cfg)  # List['UP'|'DOWN'|'SIDE']
+    return {"signals": sigs}
