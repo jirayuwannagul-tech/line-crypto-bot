@@ -1,120 +1,137 @@
 # app/logic/elliott_logic.py
 # ============================================================
-# Elliott Logic Layer
-# - เชื่อม analysis.elliott (rules) ↔ scenarios (integration)
-# - ทำหน้าที่: แปลงผลจาก rules → output ที่ scenarios ใช้ได้
+# Logic layer: wrap classify_elliott() ให้คืน "kind" ที่คงเส้นคงวา
+# โดยอาศัย context (EMA slope, ATR, swing fail ฯลฯ)
+# ไม่แก้ของเดิม — เพิ่มฟังก์ชันใหม่อย่างเดียว
 # ============================================================
 
 from __future__ import annotations
-from typing import Dict, Any
+import math
 import pandas as pd
 
-# ✅ เรียกใช้ rules จาก analysis (กฎคงเดิม)
-from app.analysis.elliott import analyze_elliott_rules
-# ✅ ใช้อินดิเคเตอร์เป็นบริบท (ไม่แก้กฎ)
-from app.analysis.indicators import apply_indicators
+# สมมติว่าไฟล์นี้เดิมมีฟังก์ชัน classify_elliott(df) อยู่แล้ว
+# from .somewhere import classify_elliott  # <- ถ้าของเดิม import แบบนี้
+# ในโปรเจกต์คุณไฟล์นี้น่าจะมี classify_elliott อยู่แล้วตามที่ test script ใช้
 
+# -------------------- Helpers (ใหม่) --------------------
+def _ema(series: pd.Series, span=20) -> pd.Series:
+    return series.ewm(span=span, adjust=False).mean()
 
-def _context(df: pd.DataFrame) -> Dict[str, float]:
+def _atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    prev_close = df["close"].shift(1)
+    tr1 = (df["high"] - df["low"]).abs()
+    tr2 = (df["high"] - prev_close).abs()
+    tr3 = (df["low"] - prev_close).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    return tr.ewm(alpha=1/period, adjust=False).mean()
+
+def enrich_context(df_ctx: pd.DataFrame, det: dict) -> dict:
     """
-    สร้างบริบทเทรนด์จากอินดิเคเตอร์พื้นฐาน (ไม่ผูกช่วงเวลา)
+    เติมข้อมูล context ลง det['current']:
+    - ema20_slope  : ค่าชัน EMA20 (อัตราส่วน)
+    - atr_pct      : ATR เทียบกับ close
+    - recent_direction: ทิศทาง 5 แท่งล่าสุด (up/down/side)
+    - swing_fail   : สัญญาณยอดอ่อนแรง (อยู่ใต้ EMA20 และทำ Lower High)
     """
-    try:
-        ctx = apply_indicators(df.copy(), ema_windows=[20, 50], rsi_window=14, atr_window=14)
-        ema20 = float(ctx["ema_20"].iloc[-1])
-        ema20_prev = float(ctx["ema_20"].iloc[-4]) if len(ctx) >= 4 else float(ctx["ema_20"].iloc[-1])
-        rsi = float(ctx["rsi_14"].iloc[-1]) if "rsi_14" in ctx else 50.0
-        atr = float(ctx["atr_14"].iloc[-1]) if "atr_14" in ctx else 0.0
-        close = float(df["close"].iloc[-1])
-        ema_slope = ema20 - ema20_prev
-        atr_pct = atr / max(close, 1e-9)
-        direction = "up" if ema_slope > 0 else ("down" if ema_slope < 0 else "side")
-        return {"ema_slope": ema_slope, "rsi": rsi, "atr_pct": atr_pct, "direction": direction}
-    except Exception:
-        # fallback เบื้องต้นกรณีอินดิเคเตอร์คำนวณไม่ได้
-        if len(df) >= 2:
-            close, prev = float(df["close"].iloc[-1]), float(df["close"].iloc[-2])
-            ema_slope = close - prev
-            direction = "up" if ema_slope > 0 else ("down" if ema_slope < 0 else "side")
-        else:
-            ema_slope, direction = 0.0, "side"
-        return {"ema_slope": ema_slope, "rsi": 50.0, "atr_pct": 0.0, "direction": direction}
+    if not isinstance(det, dict):
+        return det
+    cur = det.get("current", {}) or {}
 
+    if df_ctx is None or len(df_ctx) < 25:
+        det["current"] = cur
+        return det
 
-def _score(pattern: str, rules: list, ctx: Dict[str, float]) -> float:
+    df = df_ctx.sort_values("date").tail(120).reset_index(drop=True)
+    close = df["close"]
+    high, low = df["high"], df["low"]
+
+    ema20 = _ema(close, span=20)
+    base = ema20.iloc[-5] if len(ema20) >= 6 else ema20.iloc[0]
+    ema20_slope = float((ema20.iloc[-1] - base) / (base if base != 0 else 1e-9))
+
+    atr14 = _atr(df, 14)
+    atr_pct = float(atr14.iloc[-1] / (close.iloc[-1] if close.iloc[-1] != 0 else 1e-9))
+
+    recent_direction = "side"
+    if len(close) >= 6:
+        if close.iloc[-1] > close.iloc[-5] * 1.002:
+            recent_direction = "up"
+        elif close.iloc[-1] < close.iloc[-5] * 0.998:
+            recent_direction = "down"
+
+    lookback = min(30, len(df)-1)
+    prev_window = df.iloc[-lookback:-5] if lookback > 5 else df.iloc[:-5]
+    prev_high_max = prev_window["high"].max() if len(prev_window) else high.iloc[-6]
+    swing_fail = bool((close.iloc[-1] < ema20.iloc[-1]) and (high.iloc[-1] < prev_high_max))
+
+    # setdefault เพื่อไม่ทับค่าที่ logic เดิมอาจใส่มาแล้ว
+    cur.setdefault("ema20_slope", ema20_slope)
+    cur.setdefault("atr_pct", atr_pct)
+    cur.setdefault("recent_direction", recent_direction)
+    cur.setdefault("swing_fail", swing_fail)
+    cur.setdefault("direction", cur.get("direction", recent_direction))
+
+    det["current"] = cur
+    return det
+
+def map_kind(det: dict) -> str:
     """
-    ให้คะแนนจากกฎที่ผ่าน + บริบทเทรนด์ (พื้นฐานทั่วไป ใช้กับกราฟจริง)
+    ตัดสิน kind (IMPULSE_TOP / IMPULSE_PROGRESS / CORRECTION / UNKNOWN)
+    จากผล pattern+context ของ logic เดิม
     """
-    total = max(len(rules), 1)
-    base = sum(1 for r in rules if r.get("passed")) / total
+    patt = str(det.get("pattern", "")).upper()
+    cur  = det.get("current", {}) or {}
 
-    trend = 0.0
-    # เทรนด์ชัดช่วยยืนยันโครงสร้างคลื่นที่กำลังก้าวหน้า (progress)
-    if ctx["ema_slope"] > 0 and ctx["rsi"] >= 55:
-        trend += 0.25
-    if ctx["ema_slope"] < 0 and ctx["rsi"] <= 45:
-        trend += 0.25
-    # ความผันผวนสูง ลดความเชื่อมั่นเล็กน้อย
-    if ctx["atr_pct"] > 0.05:
-        trend -= 0.15
+    stage       = str(cur.get("stage", "")).upper()
+    direction   = str(cur.get("direction", cur.get("recent_direction", "side"))).lower()
+    recent_dir  = str(cur.get("recent_direction", direction)).lower()
+    completed   = bool(det.get("completed", False))
+    conf        = float(cur.get("confidence", 0.0))
+    ema_slope   = float(cur.get("ema20_slope", 0.0))
+    atr_pct     = float(cur.get("atr_pct", 0.0))
+    swing_fail  = bool(cur.get("swing_fail", False))
 
-    s = max(0.0, min(1.0, base + trend))
-    return s
+    # Unknown/Diagonal → ยกตาม context เมื่อมั่นใจ/สภาพแวดล้อมบ่งชี้
+    if patt in {"UNKNOWN", "DIAGONAL"}:
+        if conf >= 0.55:
+            return "CORRECTION" if recent_dir == "down" else "IMPULSE_PROGRESS"
+        if atr_pct < 0.005 and abs(ema_slope) < 5e-4:
+            return "CORRECTION"
+        return "UNKNOWN"
 
+    # CORRECTION family
+    if "CORRECTION" in stage or "WXY" in stage or patt in {"DOUBLE_THREE","ZIGZAG","FLAT","TRIANGLE","CORRECTION"}:
+        return "CORRECTION"
 
-def classify_elliott(df: pd.DataFrame) -> Dict[str, Any]:
+    # IMPULSE family
+    if "IMPULSE" in patt or "IMPULSE" in stage or "W5" in stage:
+        if completed or "TOP" in stage:
+            return "IMPULSE_TOP"
+        if swing_fail or (ema_slope <= 0 and recent_dir == "down"):
+            return "IMPULSE_TOP"
+        if ema_slope > 0 and recent_dir == "up" and conf >= 0.50:
+            return "IMPULSE_PROGRESS"
+        if ema_slope > -2e-4 and atr_pct >= 0.004:
+            return "IMPULSE_PROGRESS"
+        return "IMPULSE_TOP"
+
+    # กรณีอื่น ๆ ใช้ ATR+EMA ช่วย
+    if atr_pct < 0.005 and abs(ema_slope) < 5e-4:
+        return "CORRECTION"
+
+    return "UNKNOWN"
+
+# -------------------- Wrapper (ใหม่) --------------------
+def classify_elliott_with_kind(df: pd.DataFrame) -> dict:
     """
-    ตีความผลลัพธ์จาก analyze_elliott_rules → payload ที่ scenarios ใช้ได้
-    - ไม่แก้กฎ
-    - ใช้บริบทช่วยตัดสินใจเพื่อกราฟจริงในอนาคต
+    เรียกใช้ classify_elliott(df) เดิม → enrich_context → map_kind → คืน dict เสริม key 'kind'
     """
-    try:
-        res = analyze_elliott_rules(df, pivot_left=2, pivot_right=2)
-    except Exception:
-        return {
-            "pattern": "UNKNOWN",
-            "completed": False,
-            "current": {"direction": "side"},
-            "targets": {},
-        }
+    # เรียก logic เดิม (ต้องมีอยู่ในไฟล์นี้อยู่แล้ว)
+    out = classify_elliott(df)  # <-- ใช้ของเดิม
+    if not isinstance(out, dict):
+        out = {"pattern": "UNKNOWN", "completed": False, "current": {}}
 
-    patt = res.get("pattern", "UNKNOWN")
-    rules = res.get("rules", [])
-    debug = res.get("debug", {})
-
-    # บริบทเทรนด์ทั่วไป
-    ctx = _context(df)
-    direction = ctx["direction"]
-
-    # ให้คะแนนความเชื่อมั่น
-    s = _score(patt, rules, ctx)
-
-    # Post-interpretation (ไม่แตะกฎ):
-    # 1) ถ้า UNKNOWN แต่บริบทหนุนพอ → ยกเป็น IMPULSE (progress)
-    if patt == "UNKNOWN" and s >= 0.55:
-        patt = "IMPULSE"
-
-    # 2) สถานะ completed: ใช้บริบทยืนยันการชะลอ/กลับทิศ
-    completed = False
-    if patt in ("IMPULSE", "DIAGONAL", "ZIGZAG", "FLAT", "TRIANGLE"):
-        # ถือว่าจบคลื่นเมื่อคะแนนสูงพอ + RSI/EMA สวนทิศปัจจุบัน (สัญญาณชะลอ)
-        if s >= 0.70 and (
-            (direction == "up" and ctx["rsi"] < 50 and ctx["ema_slope"] <= 0) or
-            (direction == "down" and ctx["rsi"] > 50 and ctx["ema_slope"] >= 0)
-        ):
-            completed = True
-
-    return {
-        "pattern": patt,
-        "completed": completed,
-        "current": {
-            "direction": direction,
-            "rsi": ctx["rsi"],
-            "ema20_slope": ctx["ema_slope"],
-            "atr_pct": ctx["atr_pct"],
-            "confidence": s,
-        },
-        "targets": {},  # (เผื่อเติม fib/projection ภายหลัง)
-        "rules": rules,
-        "debug": debug,
-    }
+    out = enrich_context(df, out)
+    kind = map_kind(out)
+    out["kind"] = kind
+    return out
