@@ -235,9 +235,9 @@ def analyze_elliott(df: pd.DataFrame, **kwargs) -> Dict[str, object]:
     if "completed" not in result:
         result["completed"] = False
     if "current" not in result:
-        result["current"] = None
+        result["current"] = {}
     if "next" not in result:
-        result["next"] = None
+        result["next"] = {}
     if "targets" not in result:
         result["targets"] = []
     return result
