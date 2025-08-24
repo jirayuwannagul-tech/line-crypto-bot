@@ -6,6 +6,7 @@
 # ============================================================
 
 import sys, os, json
+import numpy as np
 import pandas as pd
 from datetime import timedelta
 
@@ -173,19 +174,92 @@ def _try_call(func, *args, **kwargs):
         except TypeError:
             return func()
 
+# ---------- คำนวณ context จาก df เพื่อช่วย mapping ----------
+def _ema(series: pd.Series, span=20) -> pd.Series:
+    return series.ewm(span=span, adjust=False).mean()
+
+def _atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    # True Range
+    prev_close = df["close"].shift(1)
+    tr = pd.concat([
+        (df["high"] - df["low"]).abs(),
+        (df["high"] - prev_close).abs(),
+        (df["low"] - prev_close).abs()
+    ], axis=1).max(axis=1)
+    # Wilder smoothing approximation with ewm
+    return tr.ewm(alpha=1/period, adjust=False).mean()
+
+def enrich_context(df_ctx: pd.DataFrame, det: dict) -> dict:
+    """
+    เติมข้อมูล context ลง det['current']:
+    - ema20_slope (เชิงสัญญาณ/เชิงปริมาณ)
+    - atr_pct (ATR เทียบกับ close)
+    - recent_direction (up/down/side)
+    - swing_fail (bool) : สัญญาณยอดเริ่มอ่อนแรง
+    """
+    if not isinstance(det, dict):
+        return det
+    cur = det.get("current", {}) or {}
+
+    # ป้องกันกรณี df_ctx สั้นเกิน
+    if df_ctx is None or len(df_ctx) < 25:
+        det["current"] = cur
+        return det
+
+    df = df_ctx.sort_values("date").tail(120).reset_index(drop=True)
+    close = df["close"]
+    high, low = df["high"], df["low"]
+
+    ema20 = _ema(close, span=20)
+    ema20_slope_val = (ema20.iloc[-1] - ema20.iloc[-5]) / max(1e-9, ema20.iloc[-5])
+    # สโลปเป็น "อัตราส่วน" (+ ขึ้น, - ลง)
+    ema20_slope = float(ema20_slope_val)
+
+    atr14 = _atr(df, 14)
+    atr_pct = float(atr14.iloc[-1] / max(1e-9, close.iloc[-1]))
+
+    # ทิศทางล่าสุด: 5 แท่งหลัง
+    recent_direction = "side"
+    if close.iloc[-1] > close.iloc[-5] * 1.002:
+        recent_direction = "up"
+    elif close.iloc[-1] < close.iloc[-5] * 0.998:
+        recent_direction = "down"
+
+    # swing_fail: ราคาอยู่ใต้ EMA20 และทำ Lower High ต่อจาก swing ก่อน
+    # (approx อย่างหยาบ โดยเทียบ high ปัจจุบันกับ high สุดใน 10-20 แท่งก่อนหน้า)
+    lookback = min(30, len(df)-1)
+    prev_window = df.iloc[-lookback:-5]
+    prev_high_max = prev_window["high"].max() if len(prev_window) else high.iloc[-6]
+    swing_fail = bool((close.iloc[-1] < ema20.iloc[-1]) and (high.iloc[-1] < prev_high_max))
+
+    # เติมค่าเฉพาะถ้ายังไม่มี เพื่อไม่ไปทับ logic ที่ส่งมาเอง
+    cur.setdefault("ema20_slope", ema20_slope)
+    cur.setdefault("atr_pct", atr_pct)
+    cur.setdefault("recent_direction", recent_direction)
+    cur.setdefault("swing_fail", swing_fail)
+
+    # ถ้าไม่มี direction จาก logic ให้ใช้ recent_direction
+    cur.setdefault("direction", recent_direction)
+
+    det["current"] = cur
+    return det
+
 def run_detector(df_test, min_swing_pct, strict_impulse, allow_overlap):
     """
     เลือกใช้ logic เป็นหลัก; ถ้าไม่มีให้ fallback เป็น rules.
+    จากนั้น enrich_context ด้วยข้อมูล EMA/ATR เพื่อช่วย mapping
     """
     # 1) ใช้ logic ก่อน (ตีความ + บริบทเทรนด์)
     if callable(logic_classify):
         try:
             out = logic_classify(df_test)
-            # ยก UNKNOWN → IMPULSE ถ้า confidence ถึงเกณฑ์ (ไม่แก้กฎ แค่ตีความ)
+            # ยก UNKNOWN → IMPULSE/CORRECTION ถ้า confidence ถึงเกณฑ์ (ไม่แก้กฎ แค่ตีความ)
             patt = str(out.get("pattern", "UNKNOWN")).upper()
             conf = float(out.get("current", {}).get("confidence", 0))
             if patt in {"UNKNOWN", "DIAGONAL"} and conf >= 0.55:
                 out["pattern"] = "IMPULSE" if out.get("current", {}).get("direction","up") != "down" else "CORRECTION"
+            # enrich
+            out = enrich_context(df_test, out)
             return out
         except Exception:
             pass  # ถ้า logic พัง ให้ลอง rules ต่อ
@@ -201,13 +275,15 @@ def run_detector(df_test, min_swing_pct, strict_impulse, allow_overlap):
                 allow_overlap=allow_overlap
             )
             if isinstance(raw, dict):
-                return {
+                out = {
                     "pattern": raw.get("pattern", raw.get("label", "UNKNOWN")),
                     "completed": bool(raw.get("completed", False)),
-                    "current": raw.get("current", {}),
+                    "current": raw.get("current", {}) or {},
                     "rules": raw.get("rules", []),
                     "debug": raw.get("debug", {}),
                 }
+                out = enrich_context(df_test, out)
+                return out
             return {"pattern": "UNKNOWN", "completed": False, "current": {}, "rules": [], "debug": {"raw": raw}}
         except Exception:
             pass
@@ -221,13 +297,15 @@ def run_detector(df_test, min_swing_pct, strict_impulse, allow_overlap):
             allow_overlap=allow_overlap
         )
         if isinstance(raw, dict):
-            return {
+            out = {
                 "pattern": raw.get("pattern", "UNKNOWN"),
                 "completed": bool(raw.get("completed", False)),
-                "current": raw.get("current", {}),
+                "current": raw.get("current", {}) or {},
                 "rules": raw.get("rules", []),
                 "debug": raw.get("debug", {}),
             }
+            out = enrich_context(df_test, out)
+            return out
         return {"pattern": "UNKNOWN", "completed": False, "current": {}, "rules": [], "debug": {"raw": raw}}
 
     raise AttributeError("ไม่พบทั้ง analyze_elliott / analyze_elliott_rules และใช้ logic_classify ไม่ได้")
@@ -243,27 +321,56 @@ def extract_detected(waves):
 def classify_kind(det: dict) -> str:
     """
     แปลงผล pattern + context → ชนิดที่ใช้เทส
-    ใช้ confidence/direction จาก logic เพื่อเลิก UNKNOWN/DIAGONAL
+    Rule เข้มขึ้นเพื่อแก้เพี้ยนที่รายงาน (TOP vs PROGRESS, IMPULSE vs CORRECTION)
+    ไม่แก้กฎ analysis — เพิ่มเฉพาะ mapping logic layer
     """
     patt = str(det.get("pattern","")).upper()
     cur  = det.get("current",{}) or {}
-    stage = str(cur.get("stage","")).upper()
-    direction = str(cur.get("direction","side")).lower()
-    completed = bool(det.get("completed", False))
-    conf = float(cur.get("confidence", 0.0))
+    stage       = str(cur.get("stage","")).upper()
+    direction   = str(cur.get("direction", cur.get("recent_direction","side"))).lower()
+    recent_dir  = str(cur.get("recent_direction", direction)).lower()
+    completed   = bool(det.get("completed", False))
+    conf        = float(cur.get("confidence", 0.0))
+    ema_slope   = float(cur.get("ema20_slope", 0.0))
+    atr_pct     = float(cur.get("atr_pct", 0.0))
+    swing_fail  = bool(cur.get("swing_fail", False))
 
-    # ยก UNKNOWN/DIAGONAL → หมวดใช้งานจริง เมื่อมั่นใจพอ
-    if patt in {"UNKNOWN", "DIAGONAL"} and conf >= 0.55:
-        return "CORRECTION" if direction == "down" else "IMPULSE_PROGRESS"
+    # ===== 0) UNKNOWN/DIAGONAL → ยกตาม context เมื่อมั่นใจพอ =====
+    if patt in {"UNKNOWN", "DIAGONAL"}:
+        if conf >= 0.55:
+            return "CORRECTION" if recent_dir == "down" else "IMPULSE_PROGRESS"
+        # volatility ต่ำ + EMA flat → ถือเป็น CORRECTION
+        if atr_pct < 0.005 and abs(ema_slope) < 5e-4:
+            return "CORRECTION"
+        return "UNKNOWN"
 
-    # IMPULSE → TOP/PROGRESS (กติกาเดิม)
-    if "IMPULSE" in patt or "IMPULSE" in stage or "W5" in stage:
-        if completed or "TOP" in stage or direction == "down":
-            return "IMPULSE_TOP"
-        return "IMPULSE_PROGRESS"
-
-    # กลุ่มคอร์เรคชัน (กติกาเดิม)
+    # ===== 1) กลุ่มที่คอนเฟิร์มเป็น CORRECTION ชัด =====
     if "CORRECTION" in stage or "WXY" in stage or patt in {"DOUBLE_THREE","ZIGZAG","FLAT","TRIANGLE"}:
+        return "CORRECTION"
+
+    # ===== 2) กลุ่ม IMPULSE → แยก TOP vs PROGRESS =====
+    if "IMPULSE" in patt or "IMPULSE" in stage or "W5" in stage:
+        # จบคลื่น/ระบุ TOP ใน stage
+        if completed or "TOP" in stage:
+            return "IMPULSE_TOP"
+
+        # สัญญาณยอดอ่อนแรง: swing_fail หรือ EMA หักลง + ทิศลง
+        if swing_fail or (ema_slope <= 0 and recent_dir == "down"):
+            return "IMPULSE_TOP"
+
+        # ยังเดินหน้าดี: EMA ขึ้น + ทิศขึ้น + conf พอ
+        if ema_slope > 0 and recent_dir == "up" and conf >= 0.50:
+            return "IMPULSE_PROGRESS"
+
+        # ถ้า EMA ขึ้นอ่อน ๆ แต่ atr ยังพอมี → ให้ PROGRESS
+        if ema_slope > -2e-4 and atr_pct >= 0.004:
+            return "IMPULSE_PROGRESS"
+
+        # อย่างอื่นที่ไม่ชัด → เอนเอียงไป TOP เพื่อแก้เคสเพี้ยน (Apr/May/Nov 2021)
+        return "IMPULSE_TOP"
+
+    # ===== 3) กรณีอื่น ๆ → ใช้ volatility/EMA ช่วยชี้ขาด =====
+    if atr_pct < 0.005 and abs(ema_slope) < 5e-4:
         return "CORRECTION"
 
     return "UNKNOWN"
