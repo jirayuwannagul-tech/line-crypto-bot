@@ -1,4 +1,5 @@
-from app.logic.strategies_momentum import momentum_breakout
+# tests/test_strategies_momentum.py
+from app.logic.strategies_momentum import momentum_breakout   # ✅ logic
 from app.analysis import filters as flt
 
 def make_series_trend(up=True, n=260, shock=False):
@@ -6,20 +7,20 @@ def make_series_trend(up=True, n=260, shock=False):
     # สร้างชุดข้อมูลที่มีเทรนด์ชัด + เบรกเอาท์ช่วงท้าย
     base = 100.0
     step = 0.3 if up else -0.3
-    closes = [base + i*step for i in range(n)]
+    closes = [base + i * step for i in range(n)]
     if shock:
         # เบรกเอาท์ท้ายสุด
         closes[-1] = closes[-2] + (5.0 if up else -5.0)
 
     def hlc(i, c):
-        return c+0.2, c-0.2
+        return c + 0.2, c - 0.2
 
     candles = []
     for i, c in enumerate(closes):
         h, l = hlc(i, c)
-        o = c - step*0.5
+        o = c - step * 0.5
         v = 1200.0
-        ts = i*60_000
+        ts = i * 60_000
         candles.append({
             "open": o,
             "high": h,

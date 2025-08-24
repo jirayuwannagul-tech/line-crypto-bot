@@ -12,7 +12,9 @@ client = TestClient(app)
 def test_price_command_btc(monkeypatch):
     # --- 1) mock resolver ให้คืนราคาปลอม โดยรองรับทั้ง price/get/resolve ---
     from app.utils import crypto_price
-    def _fake_price(symbol): return 12345.67
+
+    def _fake_price(symbol): 
+        return 12345.67
 
     if hasattr(crypto_price.resolver, "price"):
         monkeypatch.setattr(crypto_price.resolver, "price", _fake_price, raising=True)
@@ -25,9 +27,11 @@ def test_price_command_btc(monkeypatch):
 
     # --- 2) กันไม่ให้ยิง LINE จริง: mock line_bot_api.reply_message ---
     import app.routers.line_webhook as lw
+
     class _DummyLineAPI:
         def reply_message(self, *args, **kwargs):
             return None
+
     monkeypatch.setattr(lw, "line_bot_api", _DummyLineAPI(), raising=True)
 
     # --- 3) ยิง webhook ด้วยข้อความ 'ราคา BTC' ---

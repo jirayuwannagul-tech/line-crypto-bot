@@ -1,1 +1,1 @@
-from .scenarios import analyze_scenarios
+from app.logic.scenarios import analyze_scenarios

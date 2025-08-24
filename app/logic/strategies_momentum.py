@@ -1,4 +1,4 @@
-# app/analysis/strategies_momentum.py
+# app/logic/strategies_momentum.py
 # PATCH: turn momentum_breakout into working scorer
 
 from __future__ import annotations
@@ -17,9 +17,10 @@ except Exception:
         timeframe: str
         candles: List[Candle]
 
-from . import indicators as ind
-from . import patterns as pat
-from . import filters as flt
+# 🔧 FIXED: เปลี่ยนจาก relative import (.indicators) → absolute import
+from app.analysis import indicators as ind
+from app.analysis import patterns as pat
+from app.analysis import filters as flt
 
 
 def _reason(code: str, message: str, weight: float, meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -62,7 +63,7 @@ def momentum_breakout(series: Series, strategy_id: str = "momentum_breakout") ->
     long_score = 0.0
     short_score = 0.0
 
-    # --- Filters (ขั้นต่ำก่อน)—กันสัญญาณในตลาดนิ่งเกิน/ไม่มีเทรนด์
+    # --- Filters
     if not flt.trend_filter(series):
         reasons.append(_reason("FILTER_TREND_FAIL", "trend ไม่ชัดพอ", 0.0))
         return {
@@ -86,8 +87,6 @@ def momentum_breakout(series: Series, strategy_id: str = "momentum_breakout") ->
             "reasons": reasons,
             "strategy_id": strategy_id,
         }
-    # (session/volume optional)
-    # if not flt.volume_filter(series, min_multiple_of_avg=1.0): ...
 
     # --- Patterns
     brk = pat.detect_breakout(series, lookback=20)
@@ -101,7 +100,6 @@ def momentum_breakout(series: Series, strategy_id: str = "momentum_breakout") ->
     ib = pat.detect_inside_bar(series)
     if ib and ib.get("is_valid"):
         reasons.append(_reason("IB_OK", "inside bar (pre-breakout context)", 0.10, ib.get("meta")))
-        # bonus จะถูกรวมผ่านโครง EMA/RSI/MACD ด้านล่าง
 
     # --- Indicators
     import pandas as pd

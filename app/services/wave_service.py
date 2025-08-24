@@ -10,7 +10,8 @@ import pandas as pd
 import math
 
 from app.analysis.timeframes import get_data
-from app.analysis.scenarios import analyze_scenarios
+# 🔧 FIXED: เดิมคือ from app.analysis.scenarios → ตอนนี้ย้ายไป app.logic.scenarios
+from app.logic.scenarios import analyze_scenarios
 
 __all__ = ["analyze_wave", "build_brief_message"]
 

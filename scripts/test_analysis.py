@@ -1,8 +1,10 @@
+# scripts/test_analysis.py
+
 from app.analysis.timeframes import get_data
 from app.analysis.indicators import apply_indicators
 from app.analysis.dow import analyze_dow
 from app.analysis.elliott import analyze_elliott
-from app.analysis.scenarios import analyze_scenarios
+from app.logic.scenarios import analyze_scenarios  # 🔄 แก้จาก app.analysis.scenarios
 
 # 1) โหลดข้อมูล
 df = get_data("BTCUSDT", "1D")
@@ -16,7 +18,7 @@ print("Dow:", dow)
 
 # 4) Elliott
 ell = analyze_elliott(df_ind)
-print("Elliott:", {k:v for k,v in ell.items() if k!="debug"})
+print("Elliott:", {k: v for k, v in ell.items() if k != "debug"})
 
 # 5) Scenarios (รวมทุกอย่าง)
 sc = analyze_scenarios(df_ind, symbol="BTCUSDT", tf="1D")

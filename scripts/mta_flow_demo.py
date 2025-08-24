@@ -2,7 +2,7 @@
 # MTA: 1D→4H→1H พร้อมพิมพ์ PLAN & ALERT สั้นๆ
 
 from app.analysis.timeframes import get_data
-from app.analysis.scenarios import analyze_scenarios
+from app.logic.scenarios import analyze_scenarios   # ✅ เปลี่ยน import มาที่ logic
 from app.analysis.indicators import apply_indicators
 
 SYMBOL = "BTCUSDT"

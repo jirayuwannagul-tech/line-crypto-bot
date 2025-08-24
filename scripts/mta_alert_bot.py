@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()  # โหลด .env (ต้องมี LINE_CHANNEL_ACCESS_TOKEN, LINE_USER_ID, PYTHONPATH=.)
 
 from app.analysis.timeframes import get_data
-from app.analysis.scenarios import analyze_scenarios
+from app.logic.scenarios import analyze_scenarios   # ✅ แก้ import มาที่ logic
 from app.analysis.indicators import apply_indicators
 
 # ====== CONFIG ======

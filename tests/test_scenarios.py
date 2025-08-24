@@ -1,7 +1,7 @@
 # tests/test_scenarios.py
 import pytest
 import pandas as pd
-from app.analysis.scenarios import analyze_scenarios
+from app.logic.scenarios import analyze_scenarios   # ✅ เปลี่ยน path
 
 def _sample_df(n=80):
     idx = pd.date_range("2024-01-01", periods=n, freq="D")
