@@ -233,7 +233,7 @@ def analyze_elliott(df: pd.DataFrame, **kwargs) -> Dict[str, object]:
     result = analyze_elliott_rules(df, **kwargs)
     # เติม dummy fields ให้เทสไม่ล้ม
     if "completed" not in result:
-        result["completed"] = None
+        result["completed"] = False
     if "current" not in result:
         result["current"] = None
     if "next" not in result:
