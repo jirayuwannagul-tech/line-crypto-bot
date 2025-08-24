@@ -4,6 +4,8 @@
 from __future__ import annotations
 from typing import Dict, Any, List, Optional, Literal
 import math
+import hashlib
+import inspect
 
 try:
     from app.schemas.series import Series
@@ -17,19 +19,35 @@ except Exception:
         timeframe: str
         candles: List[Candle]
 
-# ✅ ใช้ absolute import
-from app.analysis import indicators as ind
+# ✅ ใช้ absolute import (เลเยอร์วิเคราะห์เดิม)
+from app.analysis import indicators as ind  # (สำรองไว้ เผื่อใช้)
 from app.analysis import patterns as pat
 from app.analysis import filters as flt
 
 Trend = Literal["UP", "DOWN", "SIDE"]
 
 # -----------------------------
+# Engine / Hash Utilities
+# -----------------------------
+def _hash_this(obj) -> str:
+    try:
+        src = inspect.getsource(obj).encode("utf-8")
+        return hashlib.md5(src).hexdigest()[:12]
+    except Exception:
+        return "nohash"
+
+__ENGINE_FILE__ = "logic/strategies_momentum.py"
+
+def _engine_log(func_name: str, **kwargs):
+    h = _hash_this(globals().get(func_name))
+    kv = "  ".join(f"{k}={v}" for k, v in kwargs.items())
+    print(f"[ENGINE] {__ENGINE_FILE__}::{func_name}  HASH={h}  {kv}".rstrip())
+
+# -----------------------------
 # Helper Functions
 # -----------------------------
 def _reason(code: str, message: str, weight: float, meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     return {"code": code, "message": message, "weight": float(weight), "meta": meta or {}}
-
 
 def _to_df(series: Series):
     import pandas as pd
@@ -41,16 +59,17 @@ def _to_df(series: Series):
         df = df.set_index("ts", drop=False)
     return df.dropna(subset=["open", "high", "low", "close", "volume"])
 
-
 def _ema(s, n):
-    import pandas as pd
-    s = pd.to_numeric(s, errors="coerce")
+    s = _to_numeric(s)
     return s.ewm(span=n, adjust=False, min_periods=n).mean()
 
+def _to_numeric(s):
+    import pandas as pd
+    return pd.to_numeric(s, errors="coerce")
 
 def _rsi(close, period: int = 14):
     import pandas as pd
-    close = pd.to_numeric(close, errors="coerce")
+    close = _to_numeric(close)
     delta = close.diff()
     gain = (delta.where(delta > 0, 0.0)).rolling(period).mean()
     loss = (-delta.where(delta < 0, 0.0)).rolling(period).mean()
@@ -59,12 +78,11 @@ def _rsi(close, period: int = 14):
     rs = gain / (loss.replace(0, math.nan))
     return 100 - (100 / (1 + rs))
 
-
 def _atr(df, period: int = 14):
     import pandas as pd
-    high = pd.to_numeric(df["high"], errors="coerce")
-    low = pd.to_numeric(df["low"], errors="coerce")
-    close = pd.to_numeric(df["close"], errors="coerce")
+    high = _to_numeric(df["high"])
+    low = _to_numeric(df["low"])
+    close = _to_numeric(df["close"])
     prev_close = close.shift(1)
     tr = (high - low).abs()
     tr = pd.concat([
@@ -74,7 +92,6 @@ def _atr(df, period: int = 14):
     ], axis=1).max(axis=1)
     return tr.ewm(span=period, adjust=False, min_periods=period).mean()
 
-
 def _decide_bias(long_score: float, short_score: float, threshold: float = 0.6) -> Literal["long", "short", "neutral"]:
     if long_score >= threshold and long_score > short_score:
         return "long"
@@ -82,9 +99,8 @@ def _decide_bias(long_score: float, short_score: float, threshold: float = 0.6) 
         return "short"
     return "neutral"
 
-
 # -----------------------------
-# Momentum Config + Series Signal (ใหม่)
+# Momentum Config + Series Signal
 # -----------------------------
 class MomentumConfig:
     def __init__(
@@ -98,6 +114,7 @@ class MomentumConfig:
         atr_period: int = 14,
         atr_flip_k: float = 0.75,  # ต้องเกิน k*ATR ถึงจะยอมสลับฝั่ง
         confirm_bars: int = 2,     # ต้องยืนยันแท่งก่อนสลับฝั่ง
+        fill_no_side: bool = True  # กำจัด SIDE ในผลลัพธ์สุดท้าย (หลังเจอสัญญาณแรก)
     ):
         self.ema_fast = ema_fast
         self.ema_slow = ema_slow
@@ -108,19 +125,31 @@ class MomentumConfig:
         self.atr_period = atr_period
         self.atr_flip_k = atr_flip_k
         self.confirm_bars = confirm_bars
-
+        self.fill_no_side = fill_no_side
 
 def momentum_signal_series(series: Series, cfg: Optional[MomentumConfig] = None) -> List[Trend]:
     """
     ให้สัญญาณโมเมนตัมต่อแท่ง (UP/DOWN/SIDE) โดยใช้ EMA regime + RSI + ATR gate + debounce flip
     - ใช้เฉพาะเลเยอร์ LOGIC (ไม่แตะ RULES)
+    - ผลลัพธ์สุดท้าย: ไม่มี SIDE ถ้าตั้ง fill_no_side=True (จะ fill-forward หลังเจอสัญญาณแรก)
     """
     cfg = cfg or MomentumConfig()
     import pandas as pd
 
     df = _to_df(series)
-    if len(df) < max(cfg.ema_trend, cfg.atr_period, cfg.rsi_period):
-        return ["SIDE"] * len(df)
+    need = max(cfg.ema_trend, cfg.atr_period, cfg.rsi_period)
+    if len(df) < need:
+        out = ["SIDE"] * len(df)
+        if cfg.fill_no_side and out:
+            # ยังไม่มีข้อมูลพอ — ปล่อยเป็น SIDE ได้
+            pass
+        _engine_log("momentum_signal_series",
+                    ema=f"{cfg.ema_fast}/{cfg.ema_slow}/{cfg.ema_trend}",
+                    rsi_period=cfg.rsi_period,
+                    confirm_bars=cfg.confirm_bars,
+                    atr=f"{cfg.atr_period}x{cfg.atr_flip_k}",
+                    fill_no_side=cfg.fill_no_side)
+        return out
 
     ema_f = _ema(df["close"], cfg.ema_fast)
     ema_s = _ema(df["close"], cfg.ema_slow)
@@ -141,6 +170,7 @@ def momentum_signal_series(series: Series, cfg: Optional[MomentumConfig] = None)
         r = float(rsi.iloc[i]) if not math.isnan(rsi.iloc[i]) else math.nan
         a = float(atr.iloc[i]) if not math.isnan(atr.iloc[i]) else math.nan
 
+        # raw signal: EMA regime + RSI
         raw: Trend = "SIDE"
         if not any(map(math.isnan, (ef, es, et, r))):
             long_bias = (es > et) and (ef > es) and (r >= cfg.rsi_bull_min)
@@ -150,15 +180,15 @@ def momentum_signal_series(series: Series, cfg: Optional[MomentumConfig] = None)
             elif short_bias:
                 raw = "DOWN"
 
-        # ATR gate ป้องกัน flip หลอก (ต้องขยับจาก EMA_fast เกิน k*ATR)
+        # ATR gate: ป้องกัน flip หลอก (ต้องขยับจาก EMA_fast/Close เกิน k*ATR)
         cur = raw
         if prev and cur != "SIDE" and cur != prev and not math.isnan(a):
             ref = ef if not math.isnan(ef) else c
             if abs(c - ref) < cfg.atr_flip_k * a:
                 cur = prev  # แรงไม่พอ ยังไม่ flip
 
-        # Debounce: ต้องยืนยัน ≥ confirm_bars ก่อนสลับ
-        if prev and cur != prev:
+        # Debounce flip: ต้องยืนยัน ≥ confirm_bars
+        if prev and cur != prev and cur != "SIDE":
             if streak_want != cur:
                 streak_want, streak_len = cur, 1
             else:
@@ -166,21 +196,37 @@ def momentum_signal_series(series: Series, cfg: Optional[MomentumConfig] = None)
             if streak_len >= cfg.confirm_bars:
                 prev = cur
                 streak_want, streak_len = None, 0
-            # ถ้ายังไม่ครบ confirm → คง prev เดิม
             out.append(prev if prev else cur)
         else:
-            # ไม่มีการขอเปลี่ยนฝั่ง
+            # ไม่มีการขอเปลี่ยนฝั่ง หรือเป็น SIDE → คงฝั่งเดิม
             streak_want, streak_len = None, 0
             prev = cur if cur != "SIDE" else (prev or "SIDE")
             out.append(prev)
 
-    return out
+    # กำจัด SIDE ในผลลัพธ์สุดท้าย (หลังเจอสัญญาณแรก)
+    if cfg.fill_no_side and out:
+        first_idx = next((i for i, v in enumerate(out) if v != "SIDE"), None)
+        if first_idx is not None:
+            fill_val = out[first_idx]
+            for i in range(first_idx):
+                out[i] = fill_val
+        # ถ้าทั้งชุดเป็น SIDE ทั้งหมด ปล่อยไว้ตามจริง
 
+    _engine_log(
+        "momentum_signal_series",
+        ema=f"{cfg.ema_fast}/{cfg.ema_slow}/{cfg.ema_trend}",
+        rsi_period=cfg.rsi_period,
+        confirm_bars=cfg.confirm_bars,
+        atr=f"{cfg.atr_period}x{cfg.atr_flip_k}",
+        fill_no_side=cfg.fill_no_side
+    )
+    return out
 
 def momentum_last_signal(series: Series, cfg: Optional[MomentumConfig] = None) -> Trend:
     sigs = momentum_signal_series(series, cfg)
-    return sigs[-1] if sigs else "SIDE"
-
+    last = sigs[-1] if sigs else "SIDE"
+    _engine_log("momentum_last_signal", last=last)
+    return last
 
 # -----------------------------
 # Main Strategy Scorer (เดิม)
@@ -254,7 +300,7 @@ def momentum_breakout(series: Series, strategy_id: str = "momentum_breakout") ->
                 short_score += 0.25
 
     # RSI14
-    close = pd.to_numeric(df["close"], errors="coerce")
+    close = _to_numeric(df["close"])
     delta = close.diff()
     gain = (delta.where(delta > 0, 0.0)).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0.0)).rolling(14).mean()
@@ -300,7 +346,6 @@ def momentum_breakout(series: Series, strategy_id: str = "momentum_breakout") ->
         "reasons": reasons[:10],
         "strategy_id": strategy_id,
     }
-
 
 # -----------------------------
 # ✅ Fix for tests
