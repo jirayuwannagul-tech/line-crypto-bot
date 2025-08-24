@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import math
 import pandas as pd
 from typing import Any, Dict
 
@@ -79,7 +78,7 @@ def _call_base_classify(df: pd.DataFrame) -> Dict[str, Any]:
 def enrich_context(df_ctx: pd.DataFrame, det: Dict[str, Any]) -> Dict[str, Any]:
     """
     เติมข้อมูล context ลง det['current']:
-    - ema20_slope  : ค่าชัน EMA20 (อัตราส่วน 5 แท่ง)
+    - ema20_slope  : ค่าชัน EMA20 (อัตราส่วนระหว่างแท่งปัจจุบันกับ 5 แท่งก่อน)
     - atr_pct      : ATR เทียบกับ close
     - recent_direction : up/down/side จากการเปรียบเทียบ 5 แท่ง
     - swing_fail   : อยู่ใต้ EMA20 และทำ Lower High เมื่อเทียบกับ high ย้อนหลัง
@@ -114,7 +113,7 @@ def enrich_context(df_ctx: pd.DataFrame, det: Dict[str, Any]) -> Dict[str, Any]:
 
     lookback = min(30, len(df)-1)
     prev_window = df.iloc[-lookback:-5] if lookback > 5 else df.iloc[:-5]
-    prev_high_max = prev_window["high"].max() if len(prev_window) else high.iloc[-6] if len(high) >= 6 else high.iloc[-1]
+    prev_high_max = prev_window["high"].max() if len(prev_window) else (high.iloc[-6] if len(high) >= 6 else high.iloc[-1])
     swing_fail = bool((close.iloc[-1] < ema20.iloc[-1]) and (high.iloc[-1] < prev_high_max))
 
     # setdefault เพื่อไม่ทับค่าที่ logic เดิมอาจใส่มาแล้ว
@@ -132,6 +131,12 @@ def map_kind(det: Dict[str, Any]) -> str:
     """
     ตัดสิน kind (IMPULSE_TOP / IMPULSE_PROGRESS / CORRECTION / UNKNOWN)
     จากผล pattern + context ของ logic เดิม
+
+    ปรับกฎสำหรับเคสที่ base classify คืน "UNKNOWN" ให้ใช้ slope/dir ช่วยชี้ขาด:
+    - ถ้า ema20_slope > +1% และทิศขึ้น → IMPULSE_PROGRESS
+    - ถ้า ema20_slope < −1% และทิศลง → CORRECTION
+    - ถ้า swing_fail และทิศไม่ขึ้น → IMPULSE_TOP
+    - ถ้า ATR พอมี (>= 2%) และ slope มีนัย (>= 0.5%) → bias ตามทิศ
     """
     patt = str(det.get("pattern", "")).upper()
     cur  = det.get("current", {}) or {}
@@ -140,24 +145,44 @@ def map_kind(det: Dict[str, Any]) -> str:
     direction   = str(cur.get("direction", cur.get("recent_direction", "side"))).lower()
     recent_dir  = str(cur.get("recent_direction", direction)).lower()
     completed   = bool(det.get("completed", False))
-    conf        = float(cur.get("confidence", 0.0))
+    conf        = float(cur.get("confidence", 0.0)) if "confidence" in cur else 0.0
     ema_slope   = float(cur.get("ema20_slope", 0.0))
     atr_pct     = float(cur.get("atr_pct", 0.0))
     swing_fail  = bool(cur.get("swing_fail", False))
 
-    # UNKNOWN/DIAGONAL → ยกตาม context เมื่อมั่นใจ/สภาพแวดล้อมบ่งชี้
+    # ---------- UNKNOWN / DIAGONAL ----------
     if patt in {"UNKNOWN", "DIAGONAL"}:
+        slope_abs = abs(ema_slope)
+
+        # ถ้ามีความมั่นใจเดิม ให้ยกตามทิศ
         if conf >= 0.55:
             return "CORRECTION" if recent_dir == "down" else "IMPULSE_PROGRESS"
-        if atr_pct < 0.005 and abs(ema_slope) < 5e-4:
+
+        # ใช้ slope ที่มีนัย ±1% ช่วยตัดสิน
+        if ema_slope >= 0.01 and recent_dir == "up":
+            return "IMPULSE_PROGRESS"
+        if ema_slope <= -0.01 and recent_dir == "down":
             return "CORRECTION"
+
+        # swing fail + ทิศไม่ขึ้น → เอนเข้าหา TOP
+        if swing_fail and recent_dir != "up":
+            return "IMPULSE_TOP"
+
+        # ถ้า ATR พอมี (>=2%) และ slope มีนัย (>=0.5%) ให้ bias ตามทิศ
+        if atr_pct >= 0.02 and slope_abs >= 0.005:
+            return "IMPULSE_PROGRESS" if recent_dir == "up" else "CORRECTION"
+
+        # สภาวะนิ่งมาก ๆ → ถือเป็น CORRECTION
+        if atr_pct < 0.005 and slope_abs < 5e-4:
+            return "CORRECTION"
+
         return "UNKNOWN"
 
-    # CORRECTION family
+    # ---------- CORRECTION family ----------
     if "CORRECTION" in stage or "WXY" in stage or patt in {"DOUBLE_THREE", "ZIGZAG", "FLAT", "TRIANGLE", "CORRECTION"}:
         return "CORRECTION"
 
-    # IMPULSE family
+    # ---------- IMPULSE family ----------
     if "IMPULSE" in patt or "IMPULSE" in stage or "W5" in stage:
         if completed or "TOP" in stage:
             return "IMPULSE_TOP"
@@ -169,7 +194,7 @@ def map_kind(det: Dict[str, Any]) -> str:
             return "IMPULSE_PROGRESS"
         return "IMPULSE_TOP"
 
-    # กรณีอื่น ๆ ใช้ ATR+EMA ช่วย
+    # ---------- อื่น ๆ ----------
     if atr_pct < 0.005 and abs(ema_slope) < 5e-4:
         return "CORRECTION"
 

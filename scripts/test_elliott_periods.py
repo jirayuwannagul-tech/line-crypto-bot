@@ -1,215 +1,230 @@
-# app/logic/elliott_logic.py
+# scripts/test_elliott_periods.py
 # ============================================================
-# Logic layer: เสริม "สมอง" สำหรับจัดหมวด kind ของ Elliott
-# - enrich_context: คำนวณ EMA slope, ATR%, recent_direction, swing_fail
-# - map_kind: แปลงผล pattern + context → kind (IMPULSE_TOP / IMPULSE_PROGRESS / CORRECTION / UNKNOWN)
-# - classify_elliott_with_kind: wrapper ที่เรียก base classify → enrich → map_kind
-# - _call_base_classify: ตัวเรียกใช้งาน classify_elliott (ถ้ามี) หรือ fallback ไป analysis layer
+# Test Elliott detection across sample periods
+# - ใช้ logic layer (classify_elliott) เป็นหลัก
+# - fallback ไป analysis rules ได้ถ้าจำเป็น
 # ============================================================
 
-from __future__ import annotations
-
+import sys, os, json
 import pandas as pd
-from typing import Any, Dict
 
-# ------------------------------------------------------------
-# NOTE:
-# ถ้ามีฟังก์ชัน classify_elliott อยู่ในไฟล์นี้หรือถูก import ไว้ก่อนหน้า
-# _call_base_classify จะเรียกใช้อันนั้นโดยตรง
-# ถ้าไม่มี → จะ fallback ไปใช้ app.analysis.elliott (rules layer)
-# ------------------------------------------------------------
+# ============================================================
+# [Layer 1] ให้ Python เห็น root project
+# ============================================================
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-# -------------------- Indicators --------------------
-def _ema(series: pd.Series, span: int = 20) -> pd.Series:
-    return series.ewm(span=span, adjust=False).mean()
+# rules (analysis) ไว้ fallback
+from app.analysis import elliott as ew
 
-def _atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
-    prev_close = df["close"].shift(1)
-    tr1 = (df["high"] - df["low"]).abs()
-    tr2 = (df["high"] - prev_close).abs()
-    tr3 = (df["low"] - prev_close).abs()
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    return tr.ewm(alpha=1/period, adjust=False).mean()
+# logic (ตีความ + บริบทเทรนด์)
+try:
+    from app.logic.elliott_logic import classify_elliott_with_kind as logic_classify
+except Exception:
+    logic_classify = None  # ถ้า import ไม่ได้ จะ fallback หา rules ตรง ๆ
 
-# -------------------- Base classify resolver --------------------
-def _call_base_classify(df: pd.DataFrame) -> Dict[str, Any]:
-    """
-    พยายามใช้ classify_elliott (ถ้ามี); ถ้าไม่มีก็ fallback ไป analysis layer
-    คืนโครงสร้างมาตรฐานแบบ dict
-    """
-    # 1) ใช้ classify_elliott จากสโคปปัจจุบัน (ถ้ามี)
-    try:
-        base_fn = classify_elliott  # type: ignore[name-defined]
-    except NameError:
-        base_fn = None
 
-    if callable(base_fn):
-        try:
-            out = base_fn(df)  # type: ignore[misc]
-            if isinstance(out, dict):
-                return out
-        except Exception:
-            pass  # ให้ fallback ต่อด้านล่าง
+# ============================================================
+# [Layer 2] ตั้งค่า Test Cases
+# ============================================================
+TEST_CASES = [
+    ("Oct 2020", "2020-10-01", "2020-10-31", "IMPULSE_PROGRESS"),
+    ("Jan 2021", "2021-01-01", "2021-01-31", "IMPULSE_PROGRESS"),
+    ("Apr 2021", "2021-04-01", "2021-04-30", "IMPULSE_TOP"),
+    ("May 2021", "2021-05-01", "2021-05-31", "IMPULSE_TOP"),
+    ("Sep 2021", "2021-09-01", "2021-09-30", "IMPULSE_PROGRESS"),
+    ("Nov 2021", "2021-11-01", "2021-11-30", "IMPULSE_TOP"),
+    ("Jan 2022", "2022-01-01", "2022-01-31", "CORRECTION"),
+    ("Jun 2022", "2022-06-01", "2022-06-30", "CORRECTION"),
+    ("Aug 2022", "2022-08-01", "2022-08-31", "CORRECTION"),
+    ("Nov 2022", "2022-11-01", "2022-11-30", "CORRECTION"),
+]
 
-    # 2) Fallback: ใช้ rules ใน analysis layer
-    try:
-        from app.analysis import elliott as ew  # import ภายในเพื่อหลีกเลี่ยงวงจรอิมพอร์ต
-        raw = None
-        if hasattr(ew, "analyze_elliott"):
-            raw = ew.analyze_elliott(df, min_swing_pct=3.0, strict_impulse=True, allow_overlap=False)
-        elif hasattr(ew, "analyze_elliott_rules"):
-            raw = ew.analyze_elliott_rules(df, min_swing_pct=3.0, strict_impulse=True, allow_overlap=False)
+TF_LIST = ["1D", "4H", "1H"]
 
-        if isinstance(raw, dict):
-            return {
-                "pattern": raw.get("pattern", raw.get("label", "UNKNOWN")),
-                "completed": bool(raw.get("completed", False)),
-                "current": raw.get("current", {}) or {},
-                "rules": raw.get("rules", []),
-                "debug": raw.get("debug", {}),
-            }
-    except Exception:
-        pass
+MIN_SWING_PCT = {
+    "1D": 3.5,
+    "4H": 2.0,
+    "1H": 1.2,
+}
 
-    # 3) สุดท้ายจริง ๆ
-    return {"pattern": "UNKNOWN", "completed": False, "current": {}, "rules": [], "debug": {}}
+CTX_BEFORE_DAYS = {"1D": 60, "4H": 45, "1H": 30}
+CTX_AFTER_DAYS = {"1D": 60, "4H": 30, "1H": 21}
 
-# -------------------- Context enrichment --------------------
-def enrich_context(df_ctx: pd.DataFrame, det: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    เติมข้อมูล context ลง det['current']:
-    - ema20_slope  : ค่าชัน EMA20 (อัตราส่วนระหว่างแท่งปัจจุบันกับ 5 แท่งก่อน)
-    - atr_pct      : ATR เทียบกับ close
-    - recent_direction : up/down/side จากการเปรียบเทียบ 5 แท่ง
-    - swing_fail   : อยู่ใต้ EMA20 และทำ Lower High เมื่อเทียบกับ high ย้อนหลัง
-    """
-    if not isinstance(det, dict):
-        return det
-    cur = det.get("current", {}) or {}
 
-    if df_ctx is None or len(df_ctx) < 25:
-        det["current"] = cur
-        return det
+# ============================================================
+# [Layer 3] Helpers
+# ============================================================
+DATE_CANDIDATES = ["date","Date","timestamp","Timestamp","time","Time","open_time","Open time","Datetime","datetime"]
+OHLC_MAPS = [
+    {"Open":"open","High":"high","Low":"low","Close":"close"},
+    {"open":"open","high":"high","low":"low","close":"close"},
+    {"OPEN":"open","HIGH":"high","LOW":"low","CLOSE":"close"},
+]
 
-    df = df_ctx.sort_values("date").tail(120).reset_index(drop=True)
-    close = df["close"]
-    high, low = df["high"], df["low"]
+def load_df(path: str) -> pd.DataFrame:
+    obj = pd.read_excel(path, sheet_name=None)
+    if isinstance(obj, dict):
+        first = list(obj)[0]
+        df = obj[first]
+    else:
+        df = obj
+    return df.copy()
 
-    ema20 = _ema(close, span=20)
-    base = ema20.iloc[-5] if len(ema20) >= 6 else ema20.iloc[0]
-    denom = base if base != 0 else 1e-9
-    ema20_slope = float((ema20.iloc[-1] - base) / denom)
+def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
+    cols = list(df.columns)
+    date_col = next((c for c in DATE_CANDIDATES if c in cols), None)
+    if not date_col:
+        lower = {c.lower(): c for c in cols}
+        for cand in [c.lower() for c in DATE_CANDIDATES]:
+            if cand in lower:
+                date_col = lower[cand]
+                break
+    if not date_col:
+        raise KeyError(f"ไม่พบคอลัมน์วันที่ใน {cols}")
 
-    atr14 = _atr(df, 14)
-    last_close = close.iloc[-1] if len(close) else 1e-9
-    atr_pct = float(atr14.iloc[-1] / (last_close if last_close != 0 else 1e-9))
+    out = df.rename(columns={date_col:"date"}).copy()
+    out["date"] = pd.to_datetime(out["date"], utc=False, errors="coerce")
 
-    recent_direction = "side"
-    if len(close) >= 6:
-        if close.iloc[-1] > close.iloc[-5] * 1.002:
-            recent_direction = "up"
-        elif close.iloc[-1] < close.iloc[-5] * 0.998:
-            recent_direction = "down"
+    for m in OHLC_MAPS:
+        if len([k for k in m if k in out.columns]) >= 3:
+            out = out.rename(columns=m)
 
-    lookback = min(30, len(df)-1)
-    prev_window = df.iloc[-lookback:-5] if lookback > 5 else df.iloc[:-5]
-    prev_high_max = prev_window["high"].max() if len(prev_window) else (high.iloc[-6] if len(high) >= 6 else high.iloc[-1])
-    swing_fail = bool((close.iloc[-1] < ema20.iloc[-1]) and (high.iloc[-1] < prev_high_max))
+    if "close" not in out.columns and "Adj Close" in out.columns:
+        out = out.rename(columns={"Adj Close":"close"})
 
-    # setdefault เพื่อไม่ทับค่าที่ logic เดิมอาจใส่มาแล้ว
-    cur.setdefault("ema20_slope", ema20_slope)
-    cur.setdefault("atr_pct", atr_pct)
-    cur.setdefault("recent_direction", recent_direction)
-    cur.setdefault("swing_fail", swing_fail)
-    cur.setdefault("direction", cur.get("direction", recent_direction))
+    miss = [c for c in ["open","high","low","close"] if c not in out.columns]
+    if miss:
+        raise KeyError(f"ไม่เจอคอลัมน์ OHLC ครบถ้วน: missing={miss}")
 
-    det["current"] = cur
-    return det
-
-# -------------------- Mapping to "kind" --------------------
-def map_kind(det: Dict[str, Any]) -> str:
-    """
-    ตัดสิน kind (IMPULSE_TOP / IMPULSE_PROGRESS / CORRECTION / UNKNOWN)
-    จากผล pattern + context ของ logic เดิม
-
-    ปรับกฎสำหรับเคสที่ base classify คืน "UNKNOWN" ให้ใช้ slope/dir ช่วยชี้ขาด:
-    - ถ้า ema20_slope > +1% และทิศขึ้น → IMPULSE_PROGRESS
-    - ถ้า ema20_slope < −1% และทิศลง → CORRECTION
-    - ถ้า swing_fail และทิศไม่ขึ้น → IMPULSE_TOP
-    - ถ้า ATR พอมี (>= 2%) และ slope มีนัย (>= 0.5%) → bias ตามทิศ
-    """
-    patt = str(det.get("pattern", "")).upper()
-    cur  = det.get("current", {}) or {}
-
-    stage       = str(cur.get("stage", "")).upper()
-    direction   = str(cur.get("direction", cur.get("recent_direction", "side"))).lower()
-    recent_dir  = str(cur.get("recent_direction", direction)).lower()
-    completed   = bool(det.get("completed", False))
-    conf        = float(cur.get("confidence", 0.0)) if "confidence" in cur else 0.0
-    ema_slope   = float(cur.get("ema20_slope", 0.0))
-    atr_pct     = float(cur.get("atr_pct", 0.0))
-    swing_fail  = bool(cur.get("swing_fail", False))
-
-    # ---------- UNKNOWN / DIAGONAL ----------
-    if patt in {"UNKNOWN", "DIAGONAL"}:
-        slope_abs = abs(ema_slope)
-
-        # ถ้ามีความมั่นใจเดิม ให้ยกตามทิศ
-        if conf >= 0.55:
-            return "CORRECTION" if recent_dir == "down" else "IMPULSE_PROGRESS"
-
-        # ใช้ slope ที่มีนัย ±1% ช่วยตัดสิน
-        if ema_slope >= 0.01 and recent_dir == "up":
-            return "IMPULSE_PROGRESS"
-        if ema_slope <= -0.01 and recent_dir == "down":
-            return "CORRECTION"
-
-        # swing fail + ทิศไม่ขึ้น → เอนเข้าหา TOP
-        if swing_fail and recent_dir != "up":
-            return "IMPULSE_TOP"
-
-        # ถ้า ATR พอมี (>=2%) และ slope มีนัย (>=0.5%) ให้ bias ตามทิศ
-        if atr_pct >= 0.02 and slope_abs >= 0.005:
-            return "IMPULSE_PROGRESS" if recent_dir == "up" else "CORRECTION"
-
-        # สภาวะนิ่งมาก ๆ → ถือเป็น CORRECTION
-        if atr_pct < 0.005 and slope_abs < 5e-4:
-            return "CORRECTION"
-
-        return "UNKNOWN"
-
-    # ---------- CORRECTION family ----------
-    if "CORRECTION" in stage or "WXY" in stage or patt in {"DOUBLE_THREE", "ZIGZAG", "FLAT", "TRIANGLE", "CORRECTION"}:
-        return "CORRECTION"
-
-    # ---------- IMPULSE family ----------
-    if "IMPULSE" in patt or "IMPULSE" in stage or "W5" in stage:
-        if completed or "TOP" in stage:
-            return "IMPULSE_TOP"
-        if swing_fail or (ema_slope <= 0 and recent_dir == "down"):
-            return "IMPULSE_TOP"
-        if ema_slope > 0 and recent_dir == "up" and conf >= 0.50:
-            return "IMPULSE_PROGRESS"
-        if ema_slope > -2e-4 and atr_pct >= 0.004:
-            return "IMPULSE_PROGRESS"
-        return "IMPULSE_TOP"
-
-    # ---------- อื่น ๆ ----------
-    if atr_pct < 0.005 and abs(ema_slope) < 5e-4:
-        return "CORRECTION"
-
-    return "UNKNOWN"
-
-# -------------------- Public API --------------------
-def classify_elliott_with_kind(df: pd.DataFrame) -> Dict[str, Any]:
-    """
-    เรียก base classify (ถ้ามี) หรือ fallback → enrich_context → map_kind → เพิ่ม key 'kind'
-    """
-    out = _call_base_classify(df)
-    if not isinstance(out, dict):
-        out = {"pattern": "UNKNOWN", "completed": False, "current": {}}
-
-    out = enrich_context(df, out)
-    kind = map_kind(out)
-    out["kind"] = kind
+    out = (
+        out[["date","open","high","low","close"]]
+        .sort_values("date")
+        .dropna(subset=["date","open","high","low","close"])
+        .reset_index(drop=True)
+    )
     return out
+
+def resample_ohlc(df: pd.DataFrame, tf: str) -> pd.DataFrame:
+    tf = tf.upper()
+    if tf == "1D":
+        return df.copy()
+
+    rule = {"4H": "4H", "1H": "1H"}[tf]
+    x = df.set_index("date")
+    if len(x.index) >= 3:
+        min_step = (x.index[1:] - x.index[:-1]).min()
+    else:
+        min_step = pd.Timedelta(days=9999)
+
+    if min_step > pd.Timedelta(hours=1) and tf in {"4H","1H"}:
+        return pd.DataFrame(columns=df.columns)
+
+    y = (
+        x.resample(rule)
+         .agg({"open":"first","high":"max","low":"min","close":"last"})
+         .dropna()
+         .reset_index()
+    )
+    return y
+
+def slice_with_context(df, start, end, tf: str):
+    start = pd.to_datetime(start)
+    end   = pd.to_datetime(end)
+    s = start - pd.Timedelta(days=CTX_BEFORE_DAYS.get(tf, 30))
+    e = end   + pd.Timedelta(days=CTX_AFTER_DAYS.get(tf, 21))
+    return df[(df["date"]>=s)&(df["date"]<=e)].copy()
+
+def run_detector(df_test, min_swing_pct):
+    if callable(logic_classify):
+        try:
+            return logic_classify(df_test)
+        except Exception:
+            pass
+    if hasattr(ew, "analyze_elliott"):
+        return ew.analyze_elliott(df_test, min_swing_pct=min_swing_pct, strict_impulse=True, allow_overlap=False)
+    return {"pattern":"UNKNOWN","completed":False,"current":{}}
+
+
+# ============================================================
+# [Layer 4] โหลดข้อมูล
+# ============================================================
+df_all = load_df("app/data/historical.xlsx")
+df_all = normalize_df(df_all)
+
+# ============================================================
+# [Layer 5] รันทดสอบ
+# ============================================================
+results = []
+
+for tf in TF_LIST:
+    if tf == "1D":
+        base_df = df_all
+    else:
+        base_df = resample_ohlc(df_all, tf)
+        if base_df.empty:
+            print(f"⚠️ ข้าม TF={tf} เพราะข้อมูลหยาบเกินไป")
+            continue
+
+    for label, start, end, expected_kind in TEST_CASES:
+        df_ctx = slice_with_context(base_df, start, end, tf)
+        if df_ctx.empty:
+            print(f"⚠️ {label} / TF={tf} ไม่มีข้อมูลพอ")
+            continue
+
+        min_swing = MIN_SWING_PCT.get(tf, 2.0)
+        det = run_detector(df_ctx, min_swing)
+
+        detected_kind = det.get("kind") or det.get("pattern","UNKNOWN")
+        result = "✅ Correct" if detected_kind == expected_kind else "❌ Incorrect"
+
+        summary = {
+            "period": label,
+            "expected_kind": expected_kind,
+            "detected_kind": detected_kind,
+            "detected_raw": det,
+            "meta": {"timeframe": tf, "candles": len(df_ctx)},
+            "result": result
+        }
+        results.append(summary)
+
+        print("== Elliott Wave Test ==")
+        print(f"TF            : {tf}")
+        print(f"Period        : {label}")
+        print(f"Expected Kind : {expected_kind}")
+        print(f"Detected Kind : {detected_kind}")
+        print(f"Result        : {result}")
+        print(f"Meta          : TF={tf}  candles={len(df_ctx)}")
+        print("-"*60)
+
+# ============================================================
+# [Layer 6] Save logs
+# ============================================================
+os.makedirs("app/reports/tests", exist_ok=True)
+log_file = "app/reports/tests/elliott_test_log.json"
+if os.path.exists(log_file):
+    try:
+        with open(log_file,"r",encoding="utf-8") as f:
+            logs = json.load(f)
+            if not isinstance(logs, list):
+                logs = []
+    except Exception:
+        logs = []
+else:
+    logs = []
+
+logs.extend(results)
+with open(log_file,"w",encoding="utf-8") as f:
+    json.dump(logs, f, indent=4, ensure_ascii=False)
+
+# ============================================================
+# [Layer 7] Main runner
+# ============================================================
+if __name__ == "__main__":
+    print("🚀 Running Elliott Wave tests ...")
+    for r in results:
+        print(
+            f"[{r['meta']['timeframe']}] {r['period']} | "
+            f"Expected={r['expected_kind']} | Detected={r['detected_kind']} "
+            f"=> {r['result']}"
+        )
+    print(f"✅ Saved all results to {log_file}")

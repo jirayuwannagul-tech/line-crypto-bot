@@ -2,7 +2,7 @@
     {
         "period": "Oct 2020",
         "expected_kind": "IMPULSE_PROGRESS",
-        "detected_kind": "UNKNOWN",
+        "detected_kind": "IMPULSE_PROGRESS",
         "detected_raw": {
             "pattern": "UNKNOWN",
             "completed": false,
@@ -15,18 +15,18 @@
             },
             "rules": [],
             "debug": {},
-            "kind": "UNKNOWN"
+            "kind": "IMPULSE_PROGRESS"
         },
         "meta": {
             "timeframe": "1D",
             "candles": 151
         },
-        "result": "❌ Incorrect"
+        "result": "✅ Correct"
     },
     {
         "period": "Jan 2021",
         "expected_kind": "IMPULSE_PROGRESS",
-        "detected_kind": "UNKNOWN",
+        "detected_kind": "IMPULSE_PROGRESS",
         "detected_raw": {
             "pattern": "UNKNOWN",
             "completed": false,
@@ -39,18 +39,18 @@
             },
             "rules": [],
             "debug": {},
-            "kind": "UNKNOWN"
+            "kind": "IMPULSE_PROGRESS"
         },
         "meta": {
             "timeframe": "1D",
             "candles": 151
         },
-        "result": "❌ Incorrect"
+        "result": "✅ Correct"
     },
     {
         "period": "Apr 2021",
         "expected_kind": "IMPULSE_TOP",
-        "detected_kind": "UNKNOWN",
+        "detected_kind": "IMPULSE_PROGRESS",
         "detected_raw": {
             "pattern": "UNKNOWN",
             "completed": false,
@@ -63,7 +63,7 @@
             },
             "rules": [],
             "debug": {},
-            "kind": "UNKNOWN"
+            "kind": "IMPULSE_PROGRESS"
         },
         "meta": {
             "timeframe": "1D",
@@ -74,7 +74,7 @@
     {
         "period": "May 2021",
         "expected_kind": "IMPULSE_TOP",
-        "detected_kind": "UNKNOWN",
+        "detected_kind": "IMPULSE_PROGRESS",
         "detected_raw": {
             "pattern": "UNKNOWN",
             "completed": false,
@@ -87,7 +87,7 @@
             },
             "rules": [],
             "debug": {},
-            "kind": "UNKNOWN"
+            "kind": "IMPULSE_PROGRESS"
         },
         "meta": {
             "timeframe": "1D",
@@ -98,7 +98,7 @@
     {
         "period": "Sep 2021",
         "expected_kind": "IMPULSE_PROGRESS",
-        "detected_kind": "UNKNOWN",
+        "detected_kind": "CORRECTION",
         "detected_raw": {
             "pattern": "UNKNOWN",
             "completed": false,
@@ -111,7 +111,7 @@
             },
             "rules": [],
             "debug": {},
-            "kind": "UNKNOWN"
+            "kind": "CORRECTION"
         },
         "meta": {
             "timeframe": "1D",
@@ -122,7 +122,7 @@
     {
         "period": "Nov 2021",
         "expected_kind": "IMPULSE_TOP",
-        "detected_kind": "UNKNOWN",
+        "detected_kind": "IMPULSE_PROGRESS",
         "detected_raw": {
             "pattern": "UNKNOWN",
             "completed": false,
@@ -135,7 +135,7 @@
             },
             "rules": [],
             "debug": {},
-            "kind": "UNKNOWN"
+            "kind": "IMPULSE_PROGRESS"
         },
         "meta": {
             "timeframe": "1D",
@@ -146,7 +146,7 @@
     {
         "period": "Jan 2022",
         "expected_kind": "CORRECTION",
-        "detected_kind": "UNKNOWN",
+        "detected_kind": "CORRECTION",
         "detected_raw": {
             "pattern": "UNKNOWN",
             "completed": false,
@@ -159,18 +159,18 @@
             },
             "rules": [],
             "debug": {},
-            "kind": "UNKNOWN"
+            "kind": "CORRECTION"
         },
         "meta": {
             "timeframe": "1D",
             "candles": 151
         },
-        "result": "❌ Incorrect"
+        "result": "✅ Correct"
     },
     {
         "period": "Jun 2022",
         "expected_kind": "CORRECTION",
-        "detected_kind": "UNKNOWN",
+        "detected_kind": "CORRECTION",
         "detected_raw": {
             "pattern": "UNKNOWN",
             "completed": false,
@@ -183,18 +183,18 @@
             },
             "rules": [],
             "debug": {},
-            "kind": "UNKNOWN"
+            "kind": "CORRECTION"
         },
         "meta": {
             "timeframe": "1D",
             "candles": 150
         },
-        "result": "❌ Incorrect"
+        "result": "✅ Correct"
     },
     {
         "period": "Aug 2022",
         "expected_kind": "CORRECTION",
-        "detected_kind": "UNKNOWN",
+        "detected_kind": "CORRECTION",
         "detected_raw": {
             "pattern": "UNKNOWN",
             "completed": false,
@@ -207,18 +207,18 @@
             },
             "rules": [],
             "debug": {},
-            "kind": "UNKNOWN"
+            "kind": "CORRECTION"
         },
         "meta": {
             "timeframe": "1D",
             "candles": 151
         },
-        "result": "❌ Incorrect"
+        "result": "✅ Correct"
     },
     {
         "period": "Nov 2022",
         "expected_kind": "CORRECTION",
-        "detected_kind": "UNKNOWN",
+        "detected_kind": "IMPULSE_PROGRESS",
         "detected_raw": {
             "pattern": "UNKNOWN",
             "completed": false,
@@ -231,7 +231,247 @@
             },
             "rules": [],
             "debug": {},
-            "kind": "UNKNOWN"
+            "kind": "IMPULSE_PROGRESS"
+        },
+        "meta": {
+            "timeframe": "1D",
+            "candles": 150
+        },
+        "result": "❌ Incorrect"
+    },
+    {
+        "period": "Oct 2020",
+        "expected_kind": "IMPULSE_PROGRESS",
+        "detected_kind": "IMPULSE_PROGRESS",
+        "detected_raw": {
+            "pattern": "UNKNOWN",
+            "completed": false,
+            "current": {
+                "ema20_slope": 0.08026910362915239,
+                "atr_pct": 0.049675450515836,
+                "recent_direction": "up",
+                "swing_fail": false,
+                "direction": "up"
+            },
+            "rules": [],
+            "debug": {},
+            "kind": "IMPULSE_PROGRESS"
+        },
+        "meta": {
+            "timeframe": "1D",
+            "candles": 151
+        },
+        "result": "✅ Correct"
+    },
+    {
+        "period": "Jan 2021",
+        "expected_kind": "IMPULSE_PROGRESS",
+        "detected_kind": "IMPULSE_PROGRESS",
+        "detected_raw": {
+            "pattern": "UNKNOWN",
+            "completed": false,
+            "current": {
+                "ema20_slope": 0.022454659048928682,
+                "atr_pct": 0.056699115415837435,
+                "recent_direction": "up",
+                "swing_fail": false,
+                "direction": "up"
+            },
+            "rules": [],
+            "debug": {},
+            "kind": "IMPULSE_PROGRESS"
+        },
+        "meta": {
+            "timeframe": "1D",
+            "candles": 151
+        },
+        "result": "✅ Correct"
+    },
+    {
+        "period": "Apr 2021",
+        "expected_kind": "IMPULSE_TOP",
+        "detected_kind": "IMPULSE_PROGRESS",
+        "detected_raw": {
+            "pattern": "UNKNOWN",
+            "completed": false,
+            "current": {
+                "ema20_slope": -0.011198064283255241,
+                "atr_pct": 0.08546778180239703,
+                "recent_direction": "up",
+                "swing_fail": false,
+                "direction": "up"
+            },
+            "rules": [],
+            "debug": {},
+            "kind": "IMPULSE_PROGRESS"
+        },
+        "meta": {
+            "timeframe": "1D",
+            "candles": 150
+        },
+        "result": "❌ Incorrect"
+    },
+    {
+        "period": "May 2021",
+        "expected_kind": "IMPULSE_TOP",
+        "detected_kind": "IMPULSE_PROGRESS",
+        "detected_raw": {
+            "pattern": "UNKNOWN",
+            "completed": false,
+            "current": {
+                "ema20_slope": 0.06948448123332072,
+                "atr_pct": 0.052702182524222804,
+                "recent_direction": "up",
+                "swing_fail": false,
+                "direction": "up"
+            },
+            "rules": [],
+            "debug": {},
+            "kind": "IMPULSE_PROGRESS"
+        },
+        "meta": {
+            "timeframe": "1D",
+            "candles": 151
+        },
+        "result": "❌ Incorrect"
+    },
+    {
+        "period": "Sep 2021",
+        "expected_kind": "IMPULSE_PROGRESS",
+        "detected_kind": "CORRECTION",
+        "detected_raw": {
+            "pattern": "UNKNOWN",
+            "completed": false,
+            "current": {
+                "ema20_slope": -0.02180564533805289,
+                "atr_pct": 0.05143290363387021,
+                "recent_direction": "down",
+                "swing_fail": true,
+                "direction": "down"
+            },
+            "rules": [],
+            "debug": {},
+            "kind": "CORRECTION"
+        },
+        "meta": {
+            "timeframe": "1D",
+            "candles": 150
+        },
+        "result": "❌ Incorrect"
+    },
+    {
+        "period": "Nov 2021",
+        "expected_kind": "IMPULSE_TOP",
+        "detected_kind": "IMPULSE_PROGRESS",
+        "detected_raw": {
+            "pattern": "UNKNOWN",
+            "completed": false,
+            "current": {
+                "ema20_slope": -0.025531806232245612,
+                "atr_pct": 0.05968594395609444,
+                "recent_direction": "up",
+                "swing_fail": true,
+                "direction": "up"
+            },
+            "rules": [],
+            "debug": {},
+            "kind": "IMPULSE_PROGRESS"
+        },
+        "meta": {
+            "timeframe": "1D",
+            "candles": 150
+        },
+        "result": "❌ Incorrect"
+    },
+    {
+        "period": "Jan 2022",
+        "expected_kind": "CORRECTION",
+        "detected_kind": "CORRECTION",
+        "detected_raw": {
+            "pattern": "UNKNOWN",
+            "completed": false,
+            "current": {
+                "ema20_slope": 0.02960413796903944,
+                "atr_pct": 0.04066165052027762,
+                "recent_direction": "down",
+                "swing_fail": false,
+                "direction": "down"
+            },
+            "rules": [],
+            "debug": {},
+            "kind": "CORRECTION"
+        },
+        "meta": {
+            "timeframe": "1D",
+            "candles": 151
+        },
+        "result": "✅ Correct"
+    },
+    {
+        "period": "Jun 2022",
+        "expected_kind": "CORRECTION",
+        "detected_kind": "CORRECTION",
+        "detected_raw": {
+            "pattern": "UNKNOWN",
+            "completed": false,
+            "current": {
+                "ema20_slope": -0.035065211780232544,
+                "atr_pct": 0.046811312867333074,
+                "recent_direction": "down",
+                "swing_fail": true,
+                "direction": "down"
+            },
+            "rules": [],
+            "debug": {},
+            "kind": "CORRECTION"
+        },
+        "meta": {
+            "timeframe": "1D",
+            "candles": 150
+        },
+        "result": "✅ Correct"
+    },
+    {
+        "period": "Aug 2022",
+        "expected_kind": "CORRECTION",
+        "detected_kind": "CORRECTION",
+        "detected_raw": {
+            "pattern": "UNKNOWN",
+            "completed": false,
+            "current": {
+                "ema20_slope": 0.017815748528938805,
+                "atr_pct": 0.030942364247310783,
+                "recent_direction": "down",
+                "swing_fail": false,
+                "direction": "down"
+            },
+            "rules": [],
+            "debug": {},
+            "kind": "CORRECTION"
+        },
+        "meta": {
+            "timeframe": "1D",
+            "candles": 151
+        },
+        "result": "✅ Correct"
+    },
+    {
+        "period": "Nov 2022",
+        "expected_kind": "CORRECTION",
+        "detected_kind": "IMPULSE_PROGRESS",
+        "detected_raw": {
+            "pattern": "UNKNOWN",
+            "completed": false,
+            "current": {
+                "ema20_slope": 0.03965451170134311,
+                "atr_pct": 0.031632203767048936,
+                "recent_direction": "up",
+                "swing_fail": false,
+                "direction": "up"
+            },
+            "rules": [],
+            "debug": {},
+            "kind": "IMPULSE_PROGRESS"
         },
         "meta": {
             "timeframe": "1D",
