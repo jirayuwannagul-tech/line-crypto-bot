@@ -25,7 +25,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -33,7 +33,8 @@ import pandas as pd
 Direction = Literal["up", "down", "side"]
 Pattern = Literal["IMPULSE", "DIAGONAL", "ZIGZAG", "FLAT", "TRIANGLE", "UNKNOWN"]
 
-__all__ = ["analyze_elliott_rules", "Pattern", "Direction"]
+# เพิ่ม "analyze_elliott" เข้า __all__ โดยไม่แตะต้องกฎ
+__all__ = ["analyze_elliott_rules", "analyze_elliott", "Pattern", "Direction"]
 
 # =============================================================================
 # Utilities: pivots & swings
@@ -298,7 +299,7 @@ def _check_flat_rules(sw: pd.DataFrame) -> Optional[Dict[str, object]]:
         return None
 
     for end in range(len(sw), 3, -1):
-        win = sw.iloc[end - 4 : end]
+        win = sw.iloc(end - 4 : end)
         types = win["type"].tolist()
         prices = win["price"].tolist()
 
@@ -445,3 +446,74 @@ def analyze_elliott_rules(
         "rules": [{"name": "no_pattern_rules_matched", "passed": False, "details": {}}],
         "debug": {"swings": sw.tail(12).to_dict("records")},
     }
+
+# =============================================================================
+# Convenience Wrapper (ไม่เปลี่ยนกฎ)
+# =============================================================================
+
+def _coerce_to_df_for_rules(
+    data: Any,
+    *,
+    high_key: str = "high",
+    low_key: str = "low",
+    close_key: str = "close",
+    date_key: str = "date",
+) -> pd.DataFrame:
+    """แปลง input (DataFrame / Mapping / Sequence) เป็น DataFrame ที่ rules ใช้งานได้
+    ไม่เพิ่ม heuristic/กฎใหม่"""
+    if isinstance(data, pd.DataFrame):
+        df = data.copy()
+    elif isinstance(data, Mapping):
+        df = pd.DataFrame(data)
+    elif isinstance(data, Sequence):
+        df = pd.DataFrame({close_key: list(data)})
+    else:
+        raise TypeError("Unsupported input type for analyze_elliott")
+
+    # เติมคอลัมน์ให้ครบ
+    def _ensure_col(name: str):
+        if name in df.columns:
+            return
+        lower = {c.lower(): c for c in df.columns}
+        for cand in (name.lower(), name.upper(), name.capitalize()):
+            if cand in lower:
+                df[name] = df[lower[cand]]
+                return
+
+    _ensure_col(close_key)
+    if high_key not in df.columns and close_key in df.columns:
+        df[high_key] = df[close_key]
+    if low_key not in df.columns and close_key in df.columns:
+        df[low_key] = df[close_key]
+
+    needed = {high_key, low_key, close_key}
+    if not needed.issubset(df.columns):
+        raise ValueError(f"Missing columns for Elliott rules: need {needed}, got {list(df.columns)}")
+
+    if date_key in df.columns:
+        df = df.sort_values(date_key).reset_index(drop=True)
+    else:
+        df = df.reset_index(drop=True)
+
+    # จำกัดขนาดเพื่อความเร็ว โดยไม่กระทบกฎ
+    if len(df) > 1200:
+        df = df.tail(1200).reset_index(drop=True)
+    return df
+
+
+def analyze_elliott(
+    data: Any,
+    *,
+    pivot_left: int = 2,
+    pivot_right: int = 2,
+    max_swings: int = 30,
+) -> Dict[str, object]:
+    """Wrapper ที่ tests เรียกใช้ → แปลง input แล้วส่งต่อให้ analyze_elliott_rules()
+    (ไม่เปลี่ยนกฎ/เกณฑ์การตัดสินใด ๆ)"""
+    df = _coerce_to_df_for_rules(data)
+    return analyze_elliott_rules(
+        df,
+        pivot_left=pivot_left,
+        pivot_right=pivot_right,
+        max_swings=max_swings,
+    )
