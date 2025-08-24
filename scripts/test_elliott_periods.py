@@ -1,3 +1,10 @@
+# scripts/test_elliott_periods.py
+# ============================================================
+# Test Elliott detection across sample periods
+# - ปรับให้ใช้ logic layer (classify_elliott) เป็นหลัก
+# - ยังรองรับ fallback ไปที่ analysis (กฎเดิม) ถ้าจำเป็น
+# ============================================================
+
 import sys, os, json
 import pandas as pd
 from datetime import timedelta
@@ -6,7 +13,16 @@ from datetime import timedelta
 # [Layer 1] ให้ Python เห็น root project
 # ============================================================
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+# rules (analysis) ไว้ fallback
 from app.analysis import elliott as ew
+
+# logic (ตีความ + บริบทเทรนด์)
+try:
+    from app.logic.elliott_logic import classify_elliott as logic_classify
+except Exception:
+    logic_classify = None  # ถ้า import ไม่ได้ จะ fallback หา rules ตรง ๆ
+
 
 # ============================================================
 # [Layer 2] ตั้งค่า Test Cases (แก้ไขแค่ตรงนี้ก็พอ)
@@ -32,11 +48,11 @@ TEST_CASES = [
 # === มาตรฐาน TF ที่จะรันทุกครั้ง ===
 TF_LIST = ["1D", "4H", "1H"]
 
-# พารามิเตอร์ analyzer (ค่าเริ่มต้น)
+# พารามิเตอร์ analyzer (ค่าเริ่มต้น) — ใช้กับ rules เท่านั้น (logic ไม่ใช้)
 STRICT_IMPULSE = True
 ALLOW_OVERLAP  = False
 
-# Min swing ต่อ TF (ปรับได้ตาม data/ความผันผวน)
+# Min swing ต่อ TF (ปรับได้ตาม data/ความผันผวน) — ใช้กับ rules เท่านั้น
 MIN_SWING_PCT = {
     "1D": 3.5,   # เดิมที่ใช้อยู่
     "4H": 2.0,
@@ -96,14 +112,16 @@ def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
     if "close" not in out.columns and "Adj Close" in out.columns:
         out = out.rename(columns={"Adj Close":"close"})
 
-    core = ["date","open","high","low","close"]
     miss = [c for c in ["open","high","low","close"] if c not in out.columns]
     if miss:
         raise KeyError(f"ไม่เจอคอลัมน์ OHLC ครบถ้วน: missing={miss}")
 
-    # เรียงเวลาและลบ NA
-    out = out.sort_values("date").dropna(subset=["date","open","high","low","close"]).reset_index(drop=True)
-
+    out = (
+        out[["date","open","high","low","close"]]
+        .sort_values("date")
+        .dropna(subset=["date","open","high","low","close"])
+        .reset_index(drop=True)
+    )
     return out
 
 def resample_ohlc(df: pd.DataFrame, tf: str) -> pd.DataFrame:
@@ -118,13 +136,12 @@ def resample_ohlc(df: pd.DataFrame, tf: str) -> pd.DataFrame:
 
     rule = {"4H": "4H", "1H": "1H"}[tf]
     x = df.set_index("date")
-    # ตรวจสอบความละเอียดข้อมูลเดิม
-    if len(x) >= 3:
+
+    if len(x.index) >= 3:
         min_step = (x.index[1:] - x.index[:-1]).min()
     else:
         min_step = pd.Timedelta(days=9999)
 
-    # ถ้าข้อมูลหยาบเกินไป (เช่น daily) จะ resample ลง TF ที่เล็กกว่าไม่ได้ → คืน DataFrame ว่างเพื่อให้เทสต์ข้าม
     if min_step > pd.Timedelta(hours=1) and tf in {"4H","1H"}:
         return pd.DataFrame(columns=df.columns)
 
@@ -151,49 +168,75 @@ def _try_call(func, *args, **kwargs):
     try:
         return func(*args, **kwargs)
     except TypeError:
-        # ถ้าชื่อพารามิเตอร์ไม่ตรง (เช่นเวอร์ชันเก่า) ลองเรียกแบบตำแหน่ง
         try:
             return func(*args)
         except TypeError:
-            # สุดท้ายลองแบบไม่มี args (อนุโลม)
             return func()
 
-def run_analyzer(df_test, min_swing_pct, strict_impulse, allow_overlap):
+def run_detector(df_test, min_swing_pct, strict_impulse, allow_overlap):
     """
-    พยายามเรียกได้ทั้ง 2 แบบ:
-    - ew.analyze_elliott(...)
-    - ew.analyze_elliott_rules(...)
-    รองรับทั้งแบบ kwargs และแบบ args เผื่อ signature ต่างกัน
+    เลือกใช้ logic เป็นหลัก; ถ้าไม่มีให้ fallback เป็น rules.
+    - logic: app.logic.elliott_logic.classify_elliott(df)
+      คืนค่า dict: {pattern, completed, current{direction,...}, rules, debug}
+    - rules : app.analysis.elliott.(analyze_elliott|analyze_elliott_rules)
+      อาจคืนโครงที่ต่างกัน → แปลงให้ใกล้เคียงกัน
     """
-    # ลอง analyze_elliott ก่อน (ถ้ามี)
+    # 1) ลอง logic ก่อน (ถ้ามี)
+    if callable(logic_classify):
+        try:
+            return logic_classify(df_test)
+        except Exception:
+            pass  # ถ้าพัง ให้ลอง rules ต่อ
+
+    # 2) fallback: rules
+    # 2.1 analyze_elliott
     if hasattr(ew, "analyze_elliott"):
         try:
-            return _try_call(
+            out = _try_call(
                 ew.analyze_elliott,
                 df_test,
                 min_swing_pct=min_swing_pct,
                 strict_impulse=strict_impulse,
                 allow_overlap=allow_overlap
             )
-        except AttributeError:
+            # พยายาม normalize โครงผลลัพธ์ให้มี pattern/rules/debug
+            if isinstance(out, dict):
+                return {
+                    "pattern": out.get("pattern", out.get("label", "UNKNOWN")),
+                    "completed": bool(out.get("completed", False)),
+                    "current": out.get("current", {}),
+                    "rules": out.get("rules", []),
+                    "debug": out.get("debug", {}),
+                }
+            return {"pattern": "UNKNOWN", "completed": False, "current": {}, "rules": [], "debug": {"raw": out}}
+        except Exception:
             pass
 
-    # ถ้าไม่มี หรือเรียกไม่ได้ ให้ลอง analyze_elliott_rules
+    # 2.2 analyze_elliott_rules
     if hasattr(ew, "analyze_elliott_rules"):
-        return _try_call(
+        out = _try_call(
             ew.analyze_elliott_rules,
             df_test,
             min_swing_pct=min_swing_pct,
             strict_impulse=strict_impulse,
             allow_overlap=allow_overlap
         )
+        if isinstance(out, dict):
+            return {
+                "pattern": out.get("pattern", "UNKNOWN"),
+                "completed": bool(out.get("completed", False)),
+                "current": out.get("current", {}),
+                "rules": out.get("rules", []),
+                "debug": out.get("debug", {}),
+            }
+        return {"pattern": "UNKNOWN", "completed": False, "current": {}, "rules": [], "debug": {"raw": out}}
 
-    # ถ้ายังไม่มีทั้งคู่ ให้แจ้งชัดเจน
     raise AttributeError(
-        "ไม่พบทั้ง analyze_elliott และ analyze_elliott_rules ใน app.analysis.elliott"
+        "ไม่พบทั้ง analyze_elliott / analyze_elliott_rules และไม่สามารถใช้ logic_classify ได้"
     )
 
 def extract_detected(waves):
+    # ใช้กับ fallback แบบเก่า (กันล่ม)
     if isinstance(waves, dict): return waves
     if isinstance(waves, list) and len(waves)>0:
         last = waves[-1]
@@ -201,6 +244,9 @@ def extract_detected(waves):
     return {"label": str(waves) if waves is not None else "None"}
 
 def classify_kind(det: dict) -> str:
+    """
+    แปลงผล pattern + สถานะ เบื้องต้น เป็นชนิดที่เทสใช้อยู่
+    """
     pattern = str(det.get("pattern","")).upper()
     stage   = str(det.get("current",{}).get("stage","")).upper()
     nextdir = str(det.get("next",{}).get("direction","")).lower()
@@ -242,8 +288,11 @@ for tf in TF_LIST:
             continue
 
         min_swing = MIN_SWING_PCT.get(tf, 2.0)
-        waves_raw = run_analyzer(df_ctx, min_swing, STRICT_IMPULSE, ALLOW_OVERLAP)
-        det = extract_detected(waves_raw)
+        det = run_detector(df_ctx, min_swing, STRICT_IMPULSE, ALLOW_OVERLAP)
+
+        # ป้องกันเคส fallback แปลก ๆ
+        if not isinstance(det, dict):
+            det = extract_detected(det)
 
         detected_kind = classify_kind(det)
         result = "✅ Correct" if detected_kind == expected_kind else "❌ Incorrect"
