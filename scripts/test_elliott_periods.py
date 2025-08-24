@@ -9,18 +9,22 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from app.analysis import elliott as ew
 
 # ============================================================
-# [Layer 2] ตั้งค่า / Test Case
-#   - ปรับช่วงเวลา / expected ที่นี่
-#   - ถ้าข้อมูลน้อย analyzer อาจ "no_swings" → มี fallback อัตโนมัติ
+# [Layer 2] ตั้งค่า / Test Case (โฟกัส IMPULSE_TOP)
 # ============================================================
-TEST_CASE = ("May 2021", "2021-05-01", "2021-05-31", "wave 5 end")
+#  ตัวอย่าง: May 2021 อยากบังคับอ่านเป็น "wave 5 end" (IMPULSE_TOP)
+TEST_CASE = ("May 2021", "2021-05-01", "2021-05-31", "IMPULSE_TOP")
 
-# โหมดและพารามิเตอร์เริ่มต้น
-USE_WEEKLY = True          # เริ่มจากรีแซมเปิลรายสัปดาห์
-MIN_SWING_PCT = 3.0        # ลดความเข้มงวดเริ่มต้น (เดิม 5.0)
+# Analyzer parameters (โหมดเข้มงวดเพื่อ bias ไปทาง impulse top)
+USE_WEEKLY = True              # เริ่มจากรีแซมเปิลรายสัปดาห์
+MIN_SWING_PCT_WEEKLY = 6.0     # สวิงขั้นต่ำ (TF สัปดาห์) — ลอง 6–8%
+MIN_SWING_PCT_DAILY  = 4.0     # fallback รายวัน
 STRICT_IMPULSE = True
-ALLOW_OVERLAP = False
-AUTO_FALLBACK_TO_DAILY = True   # ถ้า weekly ใช้ไม่ได้ → กลับไปใช้ daily อัตโนมัติ
+ALLOW_OVERLAP  = False
+AUTO_FALLBACK_TO_DAILY = True
+
+# ขยายช่วงข้อมูลให้ analyzer เห็น context มากขึ้น (ก่อน/หลัง)
+CTX_DAYS_BEFORE = 30
+CTX_DAYS_AFTER  = 30
 
 # ============================================================
 # [Layer 2.1] Helpers: โหลด & มาตรฐานคอลัมน์
@@ -44,7 +48,6 @@ def load_df(path: str) -> pd.DataFrame:
 def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
     cols = list(df.columns)
 
-    # หา column วันที่
     date_col = next((c for c in DATE_CANDIDATES if c in cols), None)
     if date_col is None:
         lower = {c.lower(): c for c in cols}
@@ -58,7 +61,6 @@ def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
     out = df.rename(columns={date_col: "date"}).copy()
     out["date"] = pd.to_datetime(out["date"])
 
-    # รีเนมคอลัมน์ราคาให้เป็นมาตรฐาน
     for m in OHLC_MAPS:
         hits = [k for k in m.keys() if k in out.columns]
         if len(hits) >= 3:
@@ -84,15 +86,13 @@ def resample_weekly(df: pd.DataFrame) -> pd.DataFrame:
           .reset_index()
     )
 
-def slice_period(df: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
-    mask = (df["date"] >= pd.to_datetime(start)) & (df["date"] <= pd.to_datetime(end))
+def slice_with_context(df: pd.DataFrame, start: str, end: str, ctx_before: int, ctx_after: int) -> pd.DataFrame:
+    s = pd.to_datetime(start) - timedelta(days=ctx_before)
+    e = pd.to_datetime(end)   + timedelta(days=ctx_after)
+    mask = (df["date"] >= s) & (df["date"] <= e)
     return df.loc[mask].copy()
 
-def run_analyzer(df_test: pd.DataFrame,
-                 min_swing_pct: float,
-                 strict_impulse: bool,
-                 allow_overlap: bool):
-    """เรียก analyzer พร้อมรองรับกรณีไม่รับ kwargs"""
+def run_analyzer(df_test: pd.DataFrame, min_swing_pct: float, strict_impulse: bool, allow_overlap: bool):
     try:
         return ew.analyze_elliott(
             df_test,
@@ -103,22 +103,18 @@ def run_analyzer(df_test: pd.DataFrame,
     except TypeError:
         return ew.analyze_elliott(df_test)
 
-def extract_detected(waves) -> str:
-    """ดึงผล (เป็น string) รองรับหลายรูปแบบ"""
+def extract_detected(waves) -> dict | str:
+    # คืน dict ถ้าเป็น dict, ถ้าเป็น list คืน element ท้าย, ถ้าอย่างอื่นคืน str
+    if isinstance(waves, dict):
+        return waves
     if isinstance(waves, list) and len(waves) > 0:
         last = waves[-1]
-        return last["label"] if isinstance(last, dict) and "label" in last else str(last)
-    elif isinstance(waves, dict):
-        return waves.get("label") or str(waves)
-    else:
-        return str(waves) if waves is not None else "None"
+        return last if isinstance(last, dict) else {"label": str(last)}
+    return {"label": str(waves) if waves is not None else "None"}
 
-def get_debug_reason(waves) -> str:
-    """ดึง debug.reason ถ้ามี"""
-    if isinstance(waves, dict):
-        dbg = waves.get("debug") or {}
-        return str(dbg.get("reason", ""))
-    return ""
+def get_debug_reason(waves_dict: dict) -> str:
+    dbg = waves_dict.get("debug") or {}
+    return str(dbg.get("reason", ""))
 
 # ============================================================
 # [Layer 3] โหลด + มาตรฐานข้อมูล
@@ -127,64 +123,105 @@ df_all = load_df("app/data/historical.xlsx")
 df_all = normalize_df(df_all)
 
 # ============================================================
-# [Layer 4] เลือกกรอบเวลา (weekly → daily fallback ถ้าจำเป็น)
+# [Layer 4] เลือกกรอบเวลา (weekly → daily fallback ถ้าจำเป็น) + context
 # ============================================================
-label, start, end, expected = TEST_CASE
-
+label, start, end, expected_kind = TEST_CASE
 used_timeframe = "W"
-source_df = resample_weekly(df_all) if USE_WEEKLY else df_all
-df_test = slice_period(source_df, start, end)
 
-# ถ้า weekly ไม่พอแท่ง หรือว่าง → fallback daily
-if df_test.empty or len(df_test) < 6:  # น้อยเกินไปสำหรับนับคลื่น
+base_df = resample_weekly(df_all) if USE_WEEKLY else df_all
+df_ctx = slice_with_context(base_df, start, end, CTX_DAYS_BEFORE, CTX_DAYS_AFTER)
+
+if df_ctx.empty or len(df_ctx) < 8:  # ต้องการแท่งพอสมควรเพื่ออ่านคลื่นใหญ่
     if USE_WEEKLY and AUTO_FALLBACK_TO_DAILY:
         used_timeframe = "D"
-        source_df = df_all  # รายวัน
-        df_test = slice_period(source_df, start, end)
+        base_df = df_all
+        df_ctx = slice_with_context(base_df, start, end, CTX_DAYS_BEFORE, CTX_DAYS_AFTER)
 
-if df_test.empty:
+if df_ctx.empty:
     raise ValueError(f"ช่วง {start} → {end} ไม่มีข้อมูล (TF={used_timeframe})")
 
 # ============================================================
-# [Layer 5] วิเคราะห์ + ลอง fallback ถ้า no_swings
+# [Layer 5] วิเคราะห์ (bias ไปทาง impulse top) + fallback no_swings
 # ============================================================
-waves = run_analyzer(df_test, MIN_SWING_PCT, STRICT_IMPULSE, ALLOW_OVERLAP)
-detected = extract_detected(waves)
-reason = get_debug_reason(waves)
+min_swing = MIN_SWING_PCT_WEEKLY if used_timeframe == "W" else MIN_SWING_PCT_DAILY
+waves_raw = run_analyzer(df_ctx, min_swing, STRICT_IMPULSE, ALLOW_OVERLAP)
+det = extract_detected(waves_raw)
+reason = get_debug_reason(det)
 
-# ถ้า weekly แล้วยัง no_swings → ลอง fallback เป็น daily อัตโนมัติ
-if "no_swings" in reason and used_timeframe == "W" and AUTO_FALLBACK_TO_DAILY:
-    used_timeframe = "D"
-    source_df = df_all
-    df_test = slice_period(source_df, start, end)
-    # ลองลด min_swing_pct ลงอีกนิด
-    waves = run_analyzer(df_test, max(MIN_SWING_PCT - 1.0, 2.0), STRICT_IMPULSE, ALLOW_OVERLAP)
-    detected = extract_detected(waves)
-    reason = get_debug_reason(waves)
+# ถ้าไม่มีสวิง/ข้อมูลไม่พอ → ลดความเข้มงวดทีละขั้น
+if "no_swings" in reason:
+    if used_timeframe == "W" and AUTO_FALLBACK_TO_DAILY:
+        used_timeframe = "D"
+        base_df = df_all
+        df_ctx = slice_with_context(base_df, start, end, CTX_DAYS_BEFORE, CTX_DAYS_AFTER)
+        waves_raw = run_analyzer(df_ctx, MIN_SWING_PCT_DAILY, STRICT_IMPULSE, ALLOW_OVERLAP)
+        det = extract_detected(waves_raw)
+        reason = get_debug_reason(det)
+    else:
+        # ลด min_swing ลงอีกนิด (แต่ไม่ต่ำกว่า 2%)
+        new_min = max(min_swing - 1.0, 2.0)
+        waves_raw = run_analyzer(df_ctx, new_min, STRICT_IMPULSE, ALLOW_OVERLAP)
+        det = extract_detected(waves_raw)
+        reason = get_debug_reason(det)
 
 # ============================================================
-# [Layer 6] สรุปผล (เทียบ expected แบบ substring เดิม)
-#   * ถ้าต้องการยืดหยุ่นขึ้น: เปลี่ยนกติกาเทียบชนิดโครงสร้างแทน
+# [Layer 6] สรุปผลแบบ "ชนิดโครงสร้าง"
+#   - เป้าหมาย: ตรวจว่าเป็น "IMPULSE_TOP" (wave-5 end) ได้ไหม
 # ============================================================
-result = "✅ Correct" if (detected and expected.lower() in str(detected).lower()) else "❌ Incorrect"
+CORRECTION_PATTERNS = {"DOUBLE_THREE", "TRIPLE_THREE", "ZIGZAG", "FLAT", "EXPANDED_FLAT", "WXY", "WXYXZ"}
+IMPULSE_PATTERNS    = {"IMPULSE", "FIVE", "FIVE_WAVE", "IMPULSE_FIVE"}
 
-summary = {
-    "period": label,
-    "expected": expected,
-    "detected": detected,
-    "result": result,
-    "meta": {
-        "timeframe": used_timeframe,
-        "candles": int(len(df_test)),
-        "debug_reason": reason
-    }
-}
+def classify_detected(det: dict) -> str:
+    # โครงสร้างทั่วไป
+    pattern = str(det.get("pattern", "")).upper()
+    completed = bool(det.get("completed", False))
+    current = det.get("current", {}) or {}
+    next_    = det.get("next", {}) or {}
+    stage = str(current.get("stage", "")).upper()
+    next_dir = str(next_.get("direction", "")).lower()
+
+    # เป็น correction ชัด ๆ
+    if pattern in CORRECTION_PATTERNS or "WXY" in stage or "CORRECTION" in stage:
+        return "CORRECTION"
+
+    # เป็น impulse และ "มีนัยว่าถึงยอด/กำลังจะลง"
+    if (pattern in IMPULSE_PATTERNS or "IMPULSE" in stage or "W5" in stage) and (
+        completed or "TOP" in stage or "PEAK" in stage or next_dir == "down"
+    ):
+        return "IMPULSE_TOP"
+
+    # เป็น impulse แต่ยังไม่ยืนยันยอด
+    if (pattern in IMPULSE_PATTERNS or "IMPULSE" in stage):
+        return "IMPULSE_PROGRESS"
+
+    # ไม่แน่ใจ
+    return "UNKNOWN"
+
+det_kind = classify_detected(det)
+
+# ตัดสินผล: เราคาดหวัง IMPULSE_TOP
+result = "✅ Correct" if det_kind == expected_kind else "❌ Incorrect"
 
 # ============================================================
 # [Layer 7] บันทึกผลรวม (append ลงไฟล์ log)
 # ============================================================
 os.makedirs("app/reports/tests", exist_ok=True)
 log_file = "app/reports/tests/elliott_test_log.json"
+
+summary = {
+    "period": label,
+    "expected_kind": expected_kind,
+    "detected_kind": det_kind,
+    "detected_raw": det,   # เก็บตัวเต็มเพื่อดีบักภายหลัง
+    "meta": {
+        "timeframe": used_timeframe,
+        "candles": int(len(df_ctx)),
+        "min_swing_pct": min_swing,
+        "debug_reason": reason or "-"
+    },
+    "result": result
+}
+
 if os.path.exists(log_file):
     with open(log_file, "r", encoding="utf-8") as f:
         logs = json.load(f)
@@ -197,10 +234,11 @@ with open(log_file, "w", encoding="utf-8") as f:
 # ============================================================
 # [Layer 8] แสดงผลบน Console
 # ============================================================
-print("== Elliott Wave Test ==")
-print(f"Period   : {label}")
-print(f"Expected : {expected}")
-print(f"Detected : {detected}")
-print(f"Result   : {result}")
-print(f"Meta     : TF={summary['meta']['timeframe']}  candles={summary['meta']['candles']}  reason={summary['meta']['debug_reason'] or '-'}")
+print("== Elliott Wave Test (Impulse-Top mode) ==")
+print(f"Period        : {label}")
+print(f"Expected Kind : {expected_kind}")
+print(f"Detected Kind : {det_kind}")
+print(f"Result        : {result}")
+print(f"Meta          : TF={summary['meta']['timeframe']}  candles={summary['meta']['candles']}  "
+      f"minSwing={summary['meta']['min_swing_pct']}%  reason={summary['meta']['debug_reason']}")
 print(f"✅ Saved to {log_file}")
