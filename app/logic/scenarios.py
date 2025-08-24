@@ -2,14 +2,16 @@
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
-import os, math
+import os
+import math
 import numpy as np
 import pandas as pd
 
+# ใช้โมดูลภายใต้ analysis เพื่อหลีกเลี่ยงวงจร import กับ logic
 from .indicators import apply_indicators
 from .dow import analyze_dow
 from .fibonacci import fib_levels, fib_extensions, detect_fib_cluster, merge_levels
-from . import elliott as ew  # analyze_elliott
+from . import elliott as ew  # ต้องมี ew.analyze_elliott
 
 __all__ = ["analyze_scenarios"]
 
@@ -46,15 +48,17 @@ _DEFAULTS: Dict = {
     },
 }
 
+
 def _safe_load_yaml(path: str) -> Optional[Dict]:
     try:
-        import yaml
+        import yaml  # lazy dep
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
                 return yaml.safe_load(f) or {}
     except Exception:
         return None
     return None
+
 
 def _merge(a: Dict, b: Dict) -> Dict:
     out = dict(a)
@@ -64,6 +68,7 @@ def _merge(a: Dict, b: Dict) -> Dict:
         else:
             out[k] = v
     return out
+
 
 def _get_profile(tf: str, name: str = "baseline") -> Dict:
     y = _safe_load_yaml(os.getenv("STRATEGY_PROFILES_PATH", "app/config/strategy_profiles.yaml")) or {}
@@ -79,6 +84,7 @@ def _get_profile(tf: str, name: str = "baseline") -> Dict:
         merged = _merge(merged, ov[tf])
     return merged
 
+
 # =============================================================================
 # Internal utils
 # =============================================================================
@@ -88,57 +94,69 @@ def _fractals(df: pd.DataFrame, left: int = 2, right: int = 2) -> Tuple[pd.Serie
     sl = np.zeros(n, dtype=bool)
     high, low = df["high"].values, df["low"].values
     for i in range(left, n - right):
-        win_h = high[i-left:i+right+1]
-        win_l = low[i-left:i+right+1]
+        win_h = high[i - left : i + right + 1]
+        win_l = low[i - left : i + right + 1]
         if np.argmax(win_h) == left and high[i] == win_h.max():
             sh[i] = True
         if np.argmin(win_l) == left and low[i] == win_l.min():
             sl[i] = True
     return pd.Series(sh, index=df.index), pd.Series(sl, index=df.index)
 
+
 def _recent_swings(df: pd.DataFrame, k: int = 7) -> Dict[str, float]:
     is_sh, is_sl = _fractals(df)
-    sw_rows: List[Tuple[int,str,float]] = []
+    sw_rows: List[Tuple[int, str, float]] = []
     for i in range(len(df)):
         if is_sh.iat[i]:
-            sw_rows.append((i,"H",float(df["high"].iat[i])))
+            sw_rows.append((i, "H", float(df["high"].iat[i])))
         if is_sl.iat[i]:
-            sw_rows.append((i,"L",float(df["low"].iat[i])))
-    if not sw_rows: return {}
+            sw_rows.append((i, "L", float(df["low"].iat[i])))
+    if not sw_rows:
+        return {}
     sw_rows.sort(key=lambda x: x[0])
-    sw_rows = sw_rows[-max(2,k):]
+    sw_rows = sw_rows[-max(2, k) :]
 
     last_type, last_price = sw_rows[-1][1], sw_rows[-1][2]
     prev = None
-    for j in range(len(sw_rows)-2,-1,-1):
+    for j in range(len(sw_rows) - 2, -1, -1):
         if sw_rows[j][1] != last_type:
-            prev = sw_rows[j]; break
+            prev = sw_rows[j]
+            break
 
-    out: Dict[str,float] = {
+    out: Dict[str, float] = {
         "last_swing_type": last_type,
         "last_swing_price": last_price,
-        "recent_high": max(p for _,t,p in sw_rows if t=="H") if any(t=="H" for _,t,_ in sw_rows) else float(df["high"].tail(20).max()),
-        "recent_low":  min(p for _,t,p in sw_rows if t=="L") if any(t=="L" for _,t,_ in sw_rows) else float(df["low"].tail(20).min()),
+        "recent_high": max(p for _, t, p in sw_rows if t == "H")
+        if any(t == "H" for _, t, _ in sw_rows)
+        else float(df["high"].tail(20).max()),
+        "recent_low": min(p for _, t, p in sw_rows if t == "L")
+        if any(t == "L" for _, t, _ in sw_rows)
+        else float(df["low"].tail(20).min()),
     }
     if prev:
-        out.update({
-            "prev_swing_type": prev[1],
-            "prev_swing_price": prev[2],
-            "leg_A": prev[2],
-            "leg_B": last_price,
-            "leg_dir": "up" if last_price>prev[2] else "down" if last_price<prev[2] else "side"
-        })
+        out.update(
+            {
+                "prev_swing_type": prev[1],
+                "prev_swing_price": prev[2],
+                "leg_A": prev[2],
+                "leg_B": last_price,
+                "leg_dir": "up" if last_price > prev[2] else "down" if last_price < prev[2] else "side",
+            }
+        )
     return out
 
-def _softmax3(u: float,d: float,s: float) -> Tuple[float,float,float]:
-    arr = np.array([u,d,s],dtype=float)
+
+def _softmax3(u: float, d: float, s: float) -> Tuple[float, float, float]:
+    arr = np.array([u, d, s], dtype=float)
     m = np.max(arr)
     e = np.exp(arr - m)
     p = e / e.sum()
     return float(p[0]), float(p[1]), float(p[2])
 
+
 def _pct(x: float) -> int:
-    return int(round(100*x))
+    return int(round(100 * x))
+
 
 # =============================================================================
 # Public API
@@ -146,23 +164,23 @@ def _pct(x: float) -> int:
 def analyze_scenarios(
     df: Optional[pd.DataFrame],
     *,
-    symbol: str="BTCUSDT",
-    tf: str="1D",
-    cfg: Optional[Dict]=None,
-) -> Dict[str,object]:
+    symbol: str = "BTCUSDT",
+    tf: str = "1D",
+    cfg: Optional[Dict] = None,
+) -> Dict[str, object]:
     if df is None:
         raise ValueError("analyze_scenarios: df is None")
 
     if len(df) < 50:
         return {
-            "percent":{"up":33,"down":33,"side":34},
-            "levels":{},
-            "rationale":["Data too short → neutral."],
-            "meta":{"symbol":symbol,"tf":tf},
+            "percent": {"up": 33, "down": 33, "side": 34},
+            "levels": {},
+            "rationale": ["Data too short → neutral."],
+            "meta": {"symbol": symbol, "tf": tf},
         }
 
     cfg = cfg or {}
-    profile_name = str(cfg.get("profile","baseline"))
+    profile_name = str(cfg.get("profile", "baseline"))
     prof = _get_profile(tf, profile_name)
 
     # Indicators
@@ -171,18 +189,20 @@ def analyze_scenarios(
 
     # Dow & Elliott
     dow = analyze_dow(df_ind)
-    ell = ew.analyze_elliott(df_ind,
-                pivot_left=cfg.get("pivot_left",2),
-                pivot_right=cfg.get("pivot_right",2))
+    ell = ew.analyze_elliott(
+        df_ind,
+        pivot_left=cfg.get("pivot_left", 2),
+        pivot_right=cfg.get("pivot_right", 2),
+    )
 
     # Swings + Fibo
-    sw_meta = _recent_swings(df_ind,k=7)
-    fibo_levels: Dict[str,Optional[float]] = {}
+    sw_meta = _recent_swings(df_ind, k=7)
+    fibo_levels: Dict[str, Optional[float]] = {}
     cluster_info: Optional[Dict] = None
-    if "leg_A" in sw_meta and "leg_B" in sw_meta and sw_meta.get("leg_dir") in ("up","down"):
-        A,B = sw_meta["leg_A"], sw_meta["leg_B"]
-        retr = fib_levels(A,B, ratios=tuple(prof["fibo"]["retr"]))["levels"]
-        exts = fib_extensions(A,B, ratios=tuple(prof["fibo"]["ext"]))["levels"]
+    if "leg_A" in sw_meta and "leg_B" in sw_meta and sw_meta.get("leg_dir") in ("up", "down"):
+        A, B = sw_meta["leg_A"], sw_meta["leg_B"]
+        retr = fib_levels(A, B, ratios=tuple(prof["fibo"]["retr"]))["levels"]
+        exts = fib_extensions(A, B, ratios=tuple(prof["fibo"]["ext"]))["levels"]
         fibo_levels = {
             "retr_0.382": retr.get("0.382"),
             "retr_0.5": retr.get("0.5"),
@@ -194,61 +214,89 @@ def analyze_scenarios(
         cluster_info = detect_fib_cluster(
             merged,
             tolerance_pct=float(prof["fibo"]["cluster_tolerance"]),
-            min_points=2
+            min_points=2,
         )
 
     # Voting
-    up_logit=down_logit=side_logit=0.0
-    notes: List[str]=[]
+    up_logit = down_logit = side_logit = 0.0
+    notes: List[str] = []
     vw = prof["voting"]
-    iw,dw,ew_w = float(vw["indicators_weight"]), float(vw["dow_weight"]), float(vw["elliott_weight"])
+    iw, dw, ew_w = float(vw["indicators_weight"]), float(vw["dow_weight"]), float(vw["elliott_weight"])
 
     # Dow
-    dp,dc = dow.get("trend_primary","SIDE"), int(dow.get("confidence",50))
-    if dp=="UP": up_logit+=1.6*dw; notes.append(f"Dow UP (conf={dc})")
-    elif dp=="DOWN": down_logit+=1.6*dw; notes.append(f"Dow DOWN (conf={dc})")
-    else: side_logit+=0.7*dw; notes.append("Dow SIDE")
+    dp, dc = dow.get("trend_primary", "SIDE"), int(dow.get("confidence", 50))
+    if dp == "UP":
+        up_logit += 1.6 * dw
+        notes.append(f"Dow UP (conf={dc})")
+    elif dp == "DOWN":
+        down_logit += 1.6 * dw
+        notes.append(f"Dow DOWN (conf={dc})")
+    else:
+        side_logit += 0.7 * dw
+        notes.append("Dow SIDE")
 
     # Elliott
-    patt, edir = ell.get("pattern","UNKNOWN"), (ell.get("current") or {}).get("direction","side")
-    if patt in ("IMPULSE","DIAGONAL"):
-        if edir=="up": up_logit+=1.5*ew_w; notes.append(f"Elliott {patt} UP")
-        elif edir=="down": down_logit+=1.5*ew_w; notes.append(f"Elliott {patt} DOWN")
+    patt, edir = ell.get("pattern", "UNKNOWN"), (ell.get("current") or {}).get("direction", "side")
+    if patt in ("IMPULSE", "DIAGONAL"):
+        if edir == "up":
+            up_logit += 1.5 * ew_w
+            notes.append(f"Elliott {patt} UP")
+        elif edir == "down":
+            down_logit += 1.5 * ew_w
+            notes.append(f"Elliott {patt} DOWN")
     else:
-        side_logit+=0.4*ew_w; notes.append(f"Elliott {patt}")
+        side_logit += 0.4 * ew_w
+        notes.append(f"Elliott {patt}")
 
     # Indicators
-    rsi = float(last.get("rsi14",np.nan))
-    macd_hist = float(last.get("macd_hist",np.nan))
-    ema50, ema200, close = float(last.get("ema50",np.nan)), float(last.get("ema200",np.nan)), float(last.get("close",np.nan))
+    rsi = float(last.get("rsi14", np.nan))
+    macd_hist = float(last.get("macd_hist", np.nan))
+    ema50, ema200, close = (
+        float(last.get("ema50", np.nan)),
+        float(last.get("ema200", np.nan)),
+        float(last.get("close", np.nan)),
+    )
 
     if not math.isnan(rsi):
-        if rsi>=float(prof["confirm"]["rsi_bull_min"]): up_logit+=0.8*iw
-        elif rsi<=float(prof["confirm"]["rsi_bear_max"]): down_logit+=0.8*iw
-        else: side_logit+=0.3*iw
+        if rsi >= float(prof["confirm"]["rsi_bull_min"]):
+            up_logit += 0.8 * iw
+        elif rsi <= float(prof["confirm"]["rsi_bear_max"]):
+            down_logit += 0.8 * iw
+        else:
+            side_logit += 0.3 * iw
 
     if not math.isnan(macd_hist):
-        if macd_hist>0: up_logit+=prof["momentum_triggers"]["macd_hist_bias_weight"]*iw
-        elif macd_hist<0: down_logit+=prof["momentum_triggers"]["macd_hist_bias_weight"]*iw
+        if macd_hist > 0:
+            up_logit += prof["momentum_triggers"]["macd_hist_bias_weight"] * iw
+        elif macd_hist < 0:
+            down_logit += prof["momentum_triggers"]["macd_hist_bias_weight"] * iw
 
-    if not any(math.isnan(x) for x in (ema50,ema200,close)):
-        if close>ema200 and ema50>ema200: up_logit+=0.9*iw
-        elif close<ema200 and ema50<ema200: down_logit+=0.9*iw
-        else: side_logit+=0.4*iw
+    if not any(math.isnan(x) for x in (ema50, ema200, close)):
+        if close > ema200 and ema50 > ema200:
+            up_logit += 0.9 * iw
+        elif close < ema200 and ema50 < ema200:
+            down_logit += 0.9 * iw
+        else:
+            side_logit += 0.4 * iw
 
-    rng = float(df_ind["high"].tail(20).max()-df_ind["low"].tail(20).min())
-    if close>0 and rng/close<float(vw["side_range_threshold"]): side_logit+=0.8
+    rng = float(df_ind["high"].tail(20).max() - df_ind["low"].tail(20).min())
+    if close > 0 and rng / close < float(vw["side_range_threshold"]):
+        side_logit += 0.8
 
     if cluster_info:
-        if profile_name=="chinchot":
-            if sw_meta.get("leg_dir")=="up": up_logit+=0.6
-            elif sw_meta.get("leg_dir")=="down": down_logit+=0.6
+        if profile_name == "chinchot":
+            if sw_meta.get("leg_dir") == "up":
+                up_logit += 0.6
+            elif sw_meta.get("leg_dir") == "down":
+                down_logit += 0.6
         else:
-            if sw_meta.get("leg_dir")=="up": up_logit+=0.3
-            elif sw_meta.get("leg_dir")=="down": down_logit+=0.3
+            if sw_meta.get("leg_dir") == "up":
+                up_logit += 0.3
+            elif sw_meta.get("leg_dir") == "down":
+                down_logit += 0.3
 
     # Softmax → percent
-    pu,pd,ps = _softmax3(up_logit,down_logit,side_logit)
+    pu, pd, ps = _softmax3(up_logit, down_logit, side_logit)
 
     levels = {
         "recent_high": sw_meta.get("recent_high"),
@@ -256,23 +304,29 @@ def analyze_scenarios(
         "ema50": None if math.isnan(ema50) else ema50,
         "ema200": None if math.isnan(ema200) else ema200,
         "fibo": fibo_levels,
-        "elliott_targets": ell.get("targets",{}),
+        "elliott_targets": ell.get("targets", {}),
         "fib_cluster": cluster_info,
     }
 
     payload = {
-        "percent":{"up":_pct(pu),"down":_pct(pd),"side":_pct(ps)},
-        "levels":levels,
-        "rationale":notes[:12],
-        "meta":{
-            "symbol":symbol,"tf":tf,"profile":profile_name,
-            "dow":dow,
-            "elliott":{k:v for k,v in ell.items() if k!="debug"},
-            "swings":{k:v for k,v in sw_meta.items() if k in ("last_swing_type","last_swing_price","prev_swing_type","prev_swing_price","leg_dir")},
+        "percent": {"up": _pct(pu), "down": _pct(pd), "side": _pct(ps)},
+        "levels": levels,
+        "rationale": notes[:12],
+        "meta": {
+            "symbol": symbol,
+            "tf": tf,
+            "profile": profile_name,
+            "dow": dow,
+            "elliott": {k: v for k, v in ell.items() if k != "debug"},
+            "swings": {
+                k: v
+                for k, v in sw_meta.items()
+                if k in ("last_swing_type", "last_swing_price", "prev_swing_type", "prev_swing_price", "leg_dir")
+            },
         },
     }
     total = sum(payload["percent"].values())
-    if total!=100:
-        diff=100-total
-        payload["percent"]["side"]=max(0,min(100,payload["percent"]["side"]+diff))
+    if total != 100:
+        diff = 100 - total
+        payload["percent"]["side"] = max(0, min(100, payload["percent"]["side"] + diff))
     return payload
