@@ -28,6 +28,14 @@ from typing import Dict, List, Literal, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+# =============================================================================
+# Tunable thresholds (ช่วยให้จูนได้ภายหลัง)
+# =============================================================================
+# เกณฑ์ "breakout" ของ wave5 เมื่อเทียบปลาย wave3 (คิดเป็นสัดส่วนของ median(w1,w3,w5))
+IMPULSE_TOP_BREAKOUT_FACTOR: float = 0.30
+# เกณฑ์ "ขนาดของ wave5" ขั้นต่ำเทียบกับคลื่น motive ที่สั้นกว่าใน (w1,w3)
+IMPULSE_W5_MIN_RATIO: float = 0.60
+
 Direction = Literal["up", "down", "side"]
 Pattern = Literal[
     "IMPULSE",
@@ -221,31 +229,64 @@ def _detect_impulse(sw: pd.DataFrame, allow_diagonal: bool = True) -> Optional[D
         if overlap and not allow_diagonal:
             continue
 
-        # ---- Completed?
-        completed = True  # conservative: consider wave5 printed -> completed
-        current_stage = "impulse_5_complete"
-        next_stage = "corrective_A" if direction == "up" else "corrective_A_down"
-
-        # ---- Targets for the NEXT move (post-impulse correction) using fib retrace of wave (0->5)
-        total_len = abs(p5 - p0)
+        # =============================================================================
+        # Completion heuristic (แยก progress vs top):
+        # ใช้สองเกณฑ์: (1) breakout ของ wave5 เทียบปลาย wave3, (2) ขนาดของ w5 เทียบ w1,w3
+        # =============================================================================
+        motive_med = float(np.median([w1, w3, max(w5, 1e-9)]))
         if direction == "up":
-            t_382 = p5 - total_len * 0.382
-            t_500 = p5 - total_len * 0.500
-            t_618 = p5 - total_len * 0.618
-            targets = {
-                "post_impulse_retrace_38.2%": float(t_382),
-                "post_impulse_retrace_50%": float(t_500),
-                "post_impulse_retrace_61.8%": float(t_618),
-            }
+            breakout = max(0.0, p5 - p3)
         else:
-            t_382 = p5 + total_len * 0.382
-            t_500 = p5 + total_len * 0.500
-            t_618 = p5 + total_len * 0.618
-            targets = {
-                "post_impulse_retrace_38.2%": float(t_382),
-                "post_impulse_retrace_50%": float(t_500),
-                "post_impulse_retrace_61.8%": float(t_618),
-            }
+            breakout = max(0.0, p3 - p5)
+        break_ok = breakout >= IMPULSE_TOP_BREAKOUT_FACTOR * motive_med
+        w5_ok    = w5 >= IMPULSE_W5_MIN_RATIO * min(w1, w3)
+
+        if break_ok and w5_ok:
+            # === เคสถึงยอดแล้ว (TOP/DIAGONAL TOP) ===
+            completed = True
+            current_stage = "impulse_5_complete"
+            next_stage = "corrective_A" if direction == "up" else "corrective_A_down"
+
+            # Targets for the NEXT move (post-impulse correction) using fib retrace of wave (0->5)
+            total_len = abs(p5 - p0)
+            if direction == "up":
+                t_382 = p5 - total_len * 0.382
+                t_500 = p5 - total_len * 0.500
+                t_618 = p5 - total_len * 0.618
+                targets = {
+                    "post_impulse_retrace_38.2%": float(t_382),
+                    "post_impulse_retrace_50%": float(t_500),
+                    "post_impulse_retrace_61.8%": float(t_618),
+                }
+            else:
+                t_382 = p5 + total_len * 0.382
+                t_500 = p5 + total_len * 0.500
+                t_618 = p5 + total_len * 0.618
+                targets = {
+                    "post_impulse_retrace_38.2%": float(t_382),
+                    "post_impulse_retrace_50%": float(t_500),
+                    "post_impulse_retrace_61.8%": float(t_618),
+                }
+        else:
+            # === เคสยัง "IMPULSE กำลังดำเนิน" (PROGRESS) ===
+            completed = False
+            current_stage = "impulse_progress"
+            next_stage = "impulse_5_in_progress"
+
+            # Targets: โปรเจคชั่น wave5 ต่อจาก p4 (100%–161.8% ของ w1)
+            base = max(w1, 1e-9)
+            proj_100 = 1.00 * base
+            proj_1618 = 1.618 * base
+            if direction == "up":
+                targets = {
+                    "wave5_projection_100%": float(p4 + proj_100),
+                    "wave5_projection_161.8%": float(p4 + proj_1618),
+                }
+            else:
+                targets = {
+                    "wave5_projection_100%": float(p4 - proj_100),
+                    "wave5_projection_161.8%": float(p4 - proj_1618),
+                }
 
         patt: Pattern = "IMPULSE"
         if overlap:
@@ -264,6 +305,14 @@ def _detect_impulse(sw: pd.DataFrame, allow_diagonal: bool = True) -> Optional[D
                 "window_prices": prices,
                 "overlap": overlap,
                 "legs": {"w1": w1, "w2": w2, "w3": w3, "w4": w4, "w5": w5},
+                "completion_metrics": {
+                    "breakout": float(breakout),
+                    "motive_median": float(motive_med),
+                    "break_ok": bool(break_ok),
+                    "w5_ok": bool(w5_ok),
+                    "BREAKOUT_FACTOR": IMPULSE_TOP_BREAKOUT_FACTOR,
+                    "W5_MIN_RATIO": IMPULSE_W5_MIN_RATIO,
+                },
             },
         )
     return None
