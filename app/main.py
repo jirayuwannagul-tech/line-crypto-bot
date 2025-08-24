@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import os
 import asyncio
-from typing import Callable
+from typing import Callable, Optional
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
@@ -15,11 +16,11 @@ from app.routers.chat import router as chat_router
 from app.routers.line_webhook import router as line_router
 from app.routers.analyze import router as analyze_router
 
-# ---- NEW: price watch loop (ต้องมีไฟล์ app/features/alerts/price_reach.py ตามที่ส่งไว้ก่อนหน้า) ----
+# ---- price watch loop (ต้องมีไฟล์ app/features/alerts/price_reach.py) ----
 from app.features.alerts.price_reach import run_loop  # background watcher
 from app.adapters.price_provider import get_price     # ฟังก์ชันดึงราคา ปัจจุบันของโปรเจกต์
 
-# ---- NEW: LINE Push API (v3) ----
+# ---- LINE Push API (v3) ----
 from linebot.v3.messaging import (
     Configuration,
     ApiClient,
@@ -29,41 +30,22 @@ from linebot.v3.messaging import (
 )
 
 
-def create_app() -> FastAPI:
-    setup_logging()
-    app = FastAPI(
-        title=settings.APP_NAME,
-        version="0.1.0",
-        docs_url="/docs",
-        redoc_url="/redoc",
-        openapi_url="/openapi.json",
-    )
-
-    # รวมเส้นทาง
-    app.include_router(health_router)               # /health
-    app.include_router(chat_router)                 # /chat
-    app.include_router(line_router, prefix="/line") # /line/webhook
-    app.include_router(analyze_router)              # /analyze/*
-
-    return app
-
-
-app = create_app()
-
-
-@app.on_event("startup")
-async def warmup_and_start_watch_loop():
-    # 1) warmup (ของเดิม)
+# -----------------------------
+# Lifespan: startup/shutdown
+# -----------------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # === startup ===
+    # 1) warmup
     await resolver.refresh(force=True)
 
     # 2) start background price-watch loop (แจ้งเตือนเมื่อแตะ entry)
-    #    ต้องตั้ง LINE_CHANNEL_ACCESS_TOKEN ใน env
     token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
-    if not token:
-        # ไม่มี token ก็ไม่ start loop เพื่อลด error ใน env dev
-        return
+    task: Optional[asyncio.Task] = None
 
     def push_text(user_id: str, text: str) -> None:
+        if not token:
+            return
         cfg = Configuration(access_token=token)
         with ApiClient(cfg) as client:
             MessagingApi(client).push_message(
@@ -85,8 +67,43 @@ async def warmup_and_start_watch_loop():
             # กันล้ม loop ทั้งชุด
             pass
 
-    # เริ่มลูปด้วย provider ปัจจุบันของระบบ
-    asyncio.create_task(run_loop(get_price, _on_hit, interval_sec=15))
+    if token:
+        # มี token ค่อยสตาร์ท watcher
+        task = asyncio.create_task(run_loop(get_price, _on_hit, interval_sec=15))
+
+    try:
+        yield
+    finally:
+        # === shutdown ===
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except Exception:
+                pass
+
+
+def create_app() -> FastAPI:
+    setup_logging()
+    app = FastAPI(
+        title=settings.APP_NAME,
+        version="0.1.0",
+        docs_url="/docs",
+        redoc_url="/redoc",
+        openapi_url="/openapi.json",
+        lifespan=lifespan,  # ✅ ใช้ lifespan แทน on_event
+    )
+
+    # รวมเส้นทาง
+    app.include_router(health_router)               # /health
+    app.include_router(chat_router)                 # /chat
+    app.include_router(line_router, prefix="/line") # /line/webhook
+    app.include_router(analyze_router)              # /analyze/*
+
+    return app
+
+
+app = create_app()
 
 
 @app.get("/")
