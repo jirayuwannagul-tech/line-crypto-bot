@@ -47,13 +47,18 @@ def _coerce_to_df(
 
     # Normalization ชื่อคอลัมน์
     cols_lower = {c.lower(): c for c in df.columns}
-    for want in (high_key, low_key, close_key):
-        if want not in df.columns:
-            # หาเทียบแบบ lower
-            if want not in cols_lower and want.upper() in cols_lower:
-                df[want] = df[cols_lower[want.upper()]]
-            elif want not in cols_lower and want.capitalize() in cols_lower:
-                df[want] = df[cols_lower[want.capitalize()]]
+    def _ensure_col(name: str):
+        if name in df.columns:
+            return
+        for cand in (name.lower(), name.upper(), name.capitalize()):
+            if cand in cols_lower:
+                df[name] = df[cols_lower[cand]]
+                return
+
+    _ensure_col(high_key)
+    _ensure_col(low_key)
+    _ensure_col(close_key)
+
     # ถ้ายังไม่มี high/low ให้ mock จาก close
     if high_key not in df.columns and close_key in df.columns:
         df[high_key] = df[close_key]
@@ -148,11 +153,34 @@ def enrich_context(df_ctx: pd.DataFrame, det: Dict[str, Any]) -> Dict[str, Any]:
         return det
     cur = det.get("current", {}) or {}
 
+    # ---------- เคสข้อมูลน้อย: ใส่ค่าพื้นฐานให้ครบเพื่อกัน KeyError ----------
     if df_ctx is None or len(df_ctx) < 25:
+        direction = "side"
+        try:
+            if df_ctx is not None and "close" in df_ctx.columns and len(df_ctx) >= 2:
+                c0 = float(df_ctx["close"].iloc[0])
+                c1 = float(df_ctx["close"].iloc[-1])
+                if c0 != 0:
+                    pct = (c1 - c0) / abs(c0)
+                    if pct > 0.002:
+                        direction = "up"
+                    elif pct < -0.002:
+                        direction = "down"
+        except Exception:
+            pass
+
+        cur.setdefault("ema20_slope", 0.0)
+        cur.setdefault("atr_pct", 0.0)
+        cur.setdefault("recent_direction", direction)
+        cur.setdefault("swing_fail", False)
+        cur.setdefault("direction", cur.get("direction", direction))
+
         det["current"] = cur
         return det
 
-    df = df_ctx.sort_values(df_ctx.columns[0]).tail(120).reset_index(drop=True) if "date" not in df_ctx.columns else df_ctx.sort_values("date").tail(120).reset_index(drop=True)
+    # ---------- เคสข้อมูลพอ: คำนวณเต็ม ----------
+    df = df_ctx.sort_values("date").tail(120).reset_index(drop=True) if "date" in df_ctx.columns \
+         else df_ctx.tail(120).reset_index(drop=True)
     close = df["close"]
     high, low = df["high"], df["low"]
 
@@ -177,7 +205,6 @@ def enrich_context(df_ctx: pd.DataFrame, det: Dict[str, Any]) -> Dict[str, Any]:
     prev_high_max = prev_window["high"].max() if len(prev_window) else (high.iloc[-6] if len(high) >= 6 else high.iloc[-1])
     swing_fail = bool((close.iloc[-1] < ema20.iloc[-1]) and (high.iloc[-1] < prev_high_max))
 
-    # setdefault เพื่อไม่ทับค่าที่ logic เดิมอาจใส่มาแล้ว
     cur.setdefault("ema20_slope", ema20_slope)
     cur.setdefault("atr_pct", atr_pct)
     cur.setdefault("recent_direction", recent_direction)
@@ -193,12 +220,6 @@ def map_kind(det: Dict[str, Any]) -> str:
     """
     ตัดสิน kind (IMPULSE_TOP / IMPULSE_PROGRESS / CORRECTION / UNKNOWN)
     จากผล pattern + context ของ logic เดิม
-
-    ปรับกฎสำหรับเคสที่ base classify คืน "UNKNOWN" ให้ใช้ slope/dir ช่วยชี้ขาด:
-    - ถ้า ema20_slope > +1% และทิศขึ้น → IMPULSE_PROGRESS
-    - ถ้า ema20_slope < −1% และทิศลง → CORRECTION
-    - ถ้า swing_fail และทิศไม่ขึ้น → IMPULSE_TOP
-    - ถ้า ATR พอมี (>= 2%) และ slope มีนัย (>= 0.5%) → bias ตามทิศ
     """
     patt = str(det.get("pattern", "")).upper()
     cur  = det.get("current", {}) or {}
@@ -216,25 +237,20 @@ def map_kind(det: Dict[str, Any]) -> str:
     if patt in {"UNKNOWN", "DIAGONAL"}:
         slope_abs = abs(ema_slope)
 
-        # ถ้ามีความมั่นใจเดิม ให้ยกตามทิศ
         if conf >= 0.55:
             return "CORRECTION" if recent_dir == "down" else "IMPULSE_PROGRESS"
 
-        # ใช้ slope ที่มีนัย ±1% ช่วยตัดสิน
         if ema_slope >= 0.01 and recent_dir == "up":
             return "IMPULSE_PROGRESS"
         if ema_slope <= -0.01 and recent_dir == "down":
             return "CORRECTION"
 
-        # swing fail + ทิศไม่ขึ้น → เอนเข้าหา TOP
         if swing_fail and recent_dir != "up":
             return "IMPULSE_TOP"
 
-        # ถ้า ATR พอมี (>=2%) และ slope มีนัย (>=0.5%) ให้ bias ตามทิศ
         if atr_pct >= 0.02 and slope_abs >= 0.005:
             return "IMPULSE_PROGRESS" if recent_dir == "up" else "CORRECTION"
 
-        # สภาวะนิ่งมาก ๆ → ถือเป็น CORRECTION
         if atr_pct < 0.005 and slope_abs < 5e-4:
             return "CORRECTION"
 
@@ -256,7 +272,6 @@ def map_kind(det: Dict[str, Any]) -> str:
             return "IMPULSE_PROGRESS"
         return "IMPULSE_TOP"
 
-    # ---------- อื่น ๆ ----------
     if atr_pct < 0.005 and abs(ema_slope) < 5e-4:
         return "CORRECTION"
 
