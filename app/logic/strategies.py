@@ -9,17 +9,17 @@ from __future__ import annotations
 from typing import Dict, Any, Optional
 import pandas as pd
 
-# ⬇️ เพิ่ม: ใช้โมเมนตัมแบบ regime+ATR gate (เลเยอร์ LOGIC เท่านั้น)
-try:
-    from app.logic.strategies_momentum import (
-        MomentumConfig,
-        momentum_signal_series,
-        momentum_last_signal,
-    )
-except Exception:
-    MomentumConfig = None  # type: ignore
-    momentum_signal_series = None  # type: ignore
-    momentum_last_signal = None  # type: ignore
+# ⬇️ runtime import เพื่อเลี่ยง Pylance: Variable not allowed in type expression
+def _rt_momentum_imports():
+    try:
+        from app.logic.strategies_momentum import (  # type: ignore
+            MomentumConfig,
+            momentum_signal_series,
+            momentum_last_signal,
+        )
+        return MomentumConfig, momentum_signal_series, momentum_last_signal
+    except Exception:
+        return None, None, None
 
 
 # -----------------------------
@@ -105,31 +105,35 @@ def some_strategy_func(data=None, symbol: str = None, tf: str = None) -> Dict[st
 
 
 # -----------------------------
-# 🔧 เพิ่ม: โมเมนตัมไฟนอลจาก Series (Regime + ATR gate + Debounce)
+# 🔧 โมเมนตัมไฟนอลจาก Series (Regime + ATR gate + Debounce)
 # -----------------------------
-def momentum_trend(series: Dict[str, Any], cfg: Optional[MomentumConfig] = None) -> Dict[str, Any]:
+def momentum_trend(series: Dict[str, Any], cfg: Optional[object] = None) -> Dict[str, Any]:
     """
     ใช้สัญญาณโมเมนตัมแบบ logic-layer:
     - คืน trend = 'UP'|'DOWN'|'SIDE'
     - map เป็น bias: long/short/neutral สำหรับ engine ที่ต้องการรูปแบบนี้
     """
+    MomentumConfig, _, momentum_last_signal = _rt_momentum_imports()
     if momentum_last_signal is None:
         # Fallback กรณี import ไม่ได้
         return {"trend": "SIDE", "bias": "neutral"}
 
-    cfg = cfg or MomentumConfig()  # type: ignore
+    if cfg is None and MomentumConfig is not None:
+        cfg = MomentumConfig()  # default runtime
     trend = momentum_last_signal(series, cfg)  # 'UP'|'DOWN'|'SIDE'
     bias = "long" if trend == "UP" else "short" if trend == "DOWN" else "neutral"
     return {"trend": trend, "bias": bias}
 
 
-def momentum_trend_series(series: Dict[str, Any], cfg: Optional[MomentumConfig] = None) -> Dict[str, Any]:
+def momentum_trend_series(series: Dict[str, Any], cfg: Optional[object] = None) -> Dict[str, Any]:
     """
     คืนทั้งซีรีส์ของสัญญาณโมเมนตัม (ต่อแท่ง) เพื่อใช้งานใน backtest/report
     """
+    MomentumConfig, momentum_signal_series, _ = _rt_momentum_imports()
     if momentum_signal_series is None:
         return {"signals": []}
 
-    cfg = cfg or MomentumConfig()  # type: ignore
+    if cfg is None and MomentumConfig is not None:
+        cfg = MomentumConfig()
     sigs = momentum_signal_series(series, cfg)  # List['UP'|'DOWN'|'SIDE']
     return {"signals": sigs}
