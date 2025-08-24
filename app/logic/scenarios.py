@@ -1,4 +1,3 @@
-# app/analysis/scenarios.py
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
@@ -7,11 +6,11 @@ import math
 import numpy as np
 import pandas as pd
 
-# ใช้โมดูลภายใต้ analysis เพื่อหลีกเลี่ยงวงจร import กับ logic
-from .indicators import apply_indicators
-from .dow import analyze_dow
-from .fibonacci import fib_levels, fib_extensions, detect_fib_cluster, merge_levels
-from . import elliott as ew  # ต้องมี ew.analyze_elliott
+# ใช้โมดูลใน analysis เท่านั้น (หลีกเลี่ยง import จาก logic)
+from app.analysis.indicators import apply_indicators
+from app.analysis.dow import analyze_dow
+from app.analysis.fibonacci import fib_levels, fib_extensions, detect_fib_cluster, merge_levels
+from app.analysis import elliott as ew  # ต้องใช้ ew.analyze_elliott
 
 __all__ = ["analyze_scenarios"]
 
@@ -51,7 +50,7 @@ _DEFAULTS: Dict = {
 
 def _safe_load_yaml(path: str) -> Optional[Dict]:
     try:
-        import yaml  # lazy dep
+        import yaml
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
                 return yaml.safe_load(f) or {}
@@ -217,13 +216,13 @@ def analyze_scenarios(
             min_points=2,
         )
 
-    # Voting
+    # Voting logic
     up_logit = down_logit = side_logit = 0.0
     notes: List[str] = []
     vw = prof["voting"]
     iw, dw, ew_w = float(vw["indicators_weight"]), float(vw["dow_weight"]), float(vw["elliott_weight"])
 
-    # Dow
+    # Dow contribution
     dp, dc = dow.get("trend_primary", "SIDE"), int(dow.get("confidence", 50))
     if dp == "UP":
         up_logit += 1.6 * dw
@@ -235,7 +234,7 @@ def analyze_scenarios(
         side_logit += 0.7 * dw
         notes.append("Dow SIDE")
 
-    # Elliott
+    # Elliott contribution
     patt, edir = ell.get("pattern", "UNKNOWN"), (ell.get("current") or {}).get("direction", "side")
     if patt in ("IMPULSE", "DIAGONAL"):
         if edir == "up":
@@ -248,7 +247,7 @@ def analyze_scenarios(
         side_logit += 0.4 * ew_w
         notes.append(f"Elliott {patt}")
 
-    # Indicators
+    # Indicators contribution
     rsi = float(last.get("rsi14", np.nan))
     macd_hist = float(last.get("macd_hist", np.nan))
     ema50, ema200, close = (
@@ -295,7 +294,7 @@ def analyze_scenarios(
             elif sw_meta.get("leg_dir") == "down":
                 down_logit += 0.3
 
-    # Softmax → percent
+    # Convert logits → percentage
     pu, pd, ps = _softmax3(up_logit, down_logit, side_logit)
 
     levels = {
