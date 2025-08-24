@@ -1,8 +1,8 @@
 # scripts/test_elliott_periods.py
 # ============================================================
 # Test Elliott detection across sample periods
-# - ปรับให้ใช้ logic layer (classify_elliott) เป็นหลัก
-# - ยังรองรับ fallback ไปที่ analysis (กฎเดิม) ถ้าจำเป็น
+# - ใช้ logic layer (classify_elliott) เป็นหลัก
+# - fallback ไป analysis rules ได้ถ้าจำเป็น
 # ============================================================
 
 import sys, os, json
@@ -48,11 +48,11 @@ TEST_CASES = [
 # === มาตรฐาน TF ที่จะรันทุกครั้ง ===
 TF_LIST = ["1D", "4H", "1H"]
 
-# พารามิเตอร์ analyzer (ค่าเริ่มต้น) — ใช้กับ rules เท่านั้น (logic ไม่ใช้)
+# พารามิเตอร์ analyzer (ใช้กับ rules เท่านั้น)
 STRICT_IMPULSE = True
 ALLOW_OVERLAP  = False
 
-# Min swing ต่อ TF (ปรับได้ตาม data/ความผันผวน) — ใช้กับ rules เท่านั้น
+# Min swing ต่อ TF (ใช้กับ rules เท่านั้น)
 MIN_SWING_PCT = {
     "1D": 3.5,   # เดิมที่ใช้อยู่
     "4H": 2.0,
@@ -176,64 +176,61 @@ def _try_call(func, *args, **kwargs):
 def run_detector(df_test, min_swing_pct, strict_impulse, allow_overlap):
     """
     เลือกใช้ logic เป็นหลัก; ถ้าไม่มีให้ fallback เป็น rules.
-    - logic: app.logic.elliott_logic.classify_elliott(df)
-      คืนค่า dict: {pattern, completed, current{direction,...}, rules, debug}
-    - rules : app.analysis.elliott.(analyze_elliott|analyze_elliott_rules)
-      อาจคืนโครงที่ต่างกัน → แปลงให้ใกล้เคียงกัน
     """
-    # 1) ลอง logic ก่อน (ถ้ามี)
+    # 1) ใช้ logic ก่อน (ตีความ + บริบทเทรนด์)
     if callable(logic_classify):
         try:
-            return logic_classify(df_test)
+            out = logic_classify(df_test)
+            # ยก UNKNOWN → IMPULSE ถ้า confidence ถึงเกณฑ์ (ไม่แก้กฎ แค่ตีความ)
+            patt = str(out.get("pattern", "UNKNOWN")).upper()
+            conf = float(out.get("current", {}).get("confidence", 0))
+            if patt == "UNKNOWN" and conf >= 0.55:
+                out["pattern"] = "IMPULSE"
+            return out
         except Exception:
-            pass  # ถ้าพัง ให้ลอง rules ต่อ
+            pass  # ถ้า logic พัง ให้ลอง rules ต่อ
 
-    # 2) fallback: rules
-    # 2.1 analyze_elliott
+    # 2) Fallback: rules → normalize โครงให้คล้าย logic
     if hasattr(ew, "analyze_elliott"):
         try:
-            out = _try_call(
+            raw = _try_call(
                 ew.analyze_elliott,
                 df_test,
                 min_swing_pct=min_swing_pct,
                 strict_impulse=strict_impulse,
                 allow_overlap=allow_overlap
             )
-            # พยายาม normalize โครงผลลัพธ์ให้มี pattern/rules/debug
-            if isinstance(out, dict):
+            if isinstance(raw, dict):
                 return {
-                    "pattern": out.get("pattern", out.get("label", "UNKNOWN")),
-                    "completed": bool(out.get("completed", False)),
-                    "current": out.get("current", {}),
-                    "rules": out.get("rules", []),
-                    "debug": out.get("debug", {}),
+                    "pattern": raw.get("pattern", raw.get("label", "UNKNOWN")),
+                    "completed": bool(raw.get("completed", False)),
+                    "current": raw.get("current", {}),
+                    "rules": raw.get("rules", []),
+                    "debug": raw.get("debug", {}),
                 }
-            return {"pattern": "UNKNOWN", "completed": False, "current": {}, "rules": [], "debug": {"raw": out}}
+            return {"pattern": "UNKNOWN", "completed": False, "current": {}, "rules": [], "debug": {"raw": raw}}
         except Exception:
             pass
 
-    # 2.2 analyze_elliott_rules
     if hasattr(ew, "analyze_elliott_rules"):
-        out = _try_call(
+        raw = _try_call(
             ew.analyze_elliott_rules,
             df_test,
             min_swing_pct=min_swing_pct,
             strict_impulse=strict_impulse,
             allow_overlap=allow_overlap
         )
-        if isinstance(out, dict):
+        if isinstance(raw, dict):
             return {
-                "pattern": out.get("pattern", "UNKNOWN"),
-                "completed": bool(out.get("completed", False)),
-                "current": out.get("current", {}),
-                "rules": out.get("rules", []),
-                "debug": out.get("debug", {}),
+                "pattern": raw.get("pattern", "UNKNOWN"),
+                "completed": bool(raw.get("completed", False)),
+                "current": raw.get("current", {}),
+                "rules": raw.get("rules", []),
+                "debug": raw.get("debug", {}),
             }
-        return {"pattern": "UNKNOWN", "completed": False, "current": {}, "rules": [], "debug": {"raw": out}}
+        return {"pattern": "UNKNOWN", "completed": False, "current": {}, "rules": [], "debug": {"raw": raw}}
 
-    raise AttributeError(
-        "ไม่พบทั้ง analyze_elliott / analyze_elliott_rules และไม่สามารถใช้ logic_classify ได้"
-    )
+    raise AttributeError("ไม่พบทั้ง analyze_elliott / analyze_elliott_rules และใช้ logic_classify ไม่ได้")
 
 def extract_detected(waves):
     # ใช้กับ fallback แบบเก่า (กันล่ม)
