@@ -176,7 +176,7 @@ def main():
 
     # 2) วิเคราะห์ scenarios
     #    ผลลัพธ์คาดหวัง: dict ที่มี probs/best/targets/stop เป็นต้น
-    result = analyze_scenarios(df=df, symbol=args.symbol, timeframe=args.tf, profile=args.profile)
+    result = analyze_scenarios(df=df, symbol=args.symbol, tf=args.tf)
 
     # 3) สร้างสรุปข้อความ
     text = _format_line_message(
