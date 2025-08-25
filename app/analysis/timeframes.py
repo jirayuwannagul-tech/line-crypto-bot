@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Literal, Optional, Sequence
+from typing import Literal, Optional, Sequence, List
 
 import pandas as pd
 
@@ -18,6 +18,12 @@ __all__ = [
 DATA_PATH_DEFAULT = os.getenv("HISTORICAL_XLSX_PATH", "app/data/historical.xlsx")
 SUPPORTED_TF: tuple[str, ...] = ("1H", "4H", "1D", "1W")
 REQUIRED_COLUMNS: Sequence[str] = ("timestamp", "open", "high", "low", "close", "volume")
+
+# ========= CHANGE: Real-time fetch settings (ENV) =========
+REALTIME_ON = os.getenv("REALTIME", "").strip() == "1"
+REALTIME_PROVIDERS = [p.strip().lower() for p in os.getenv("PROVIDERS", "binance").split(",") if p.strip()]
+REALTIME_LIMIT = int(os.getenv("REALTIME_LIMIT", "1000"))  # per provider call (max 1000 for Binance)
+REALTIME_TIMEOUT = int(os.getenv("REALTIME_TIMEOUT", "12"))  # seconds
 
 
 # ---- Errors ----
@@ -172,6 +178,83 @@ def _resample_to_1w(df_1d: pd.DataFrame) -> pd.DataFrame:
     return df.loc[:, ["timestamp", "open", "high", "low", "close", "volume"]]
 
 
+# ========= CHANGE: Real-time provider chain (Binance first, pluggable) =========
+def _tf_to_exchange_interval(tf: str) -> str:
+    """Map '1H','4H','1D','1W' -> exchange interval string (Binance-compatible)."""
+    t = (tf or "").strip().upper()
+    return {
+        "1H": "1h",
+        "4H": "4h",
+        "1D": "1d",
+        "1W": "1w",
+    }.get(t, "1d")
+
+def _fetch_ohlcv_binance(symbol: str, interval: str, limit: int) -> Optional[pd.DataFrame]:
+    """
+    Fetch OHLCV from Binance public endpoint (api/v3/klines).
+    Returns DataFrame or None on failure.
+    """
+    import requests  # local import เพื่อลด dependency ตอนใช้โหมดไฟล์
+    url = "https://api.binance.com/api/v3/klines"
+    params = {"symbol": symbol.upper(), "interval": interval, "limit": min(int(limit), 1000)}
+    try:
+        r = requests.get(url, params=params, timeout=REALTIME_TIMEOUT)
+        r.raise_for_status()
+        data = r.json()
+        if not data:
+            return None
+        rows = []
+        for k in data:
+            # kline spec: [openTime, open, high, low, close, volume, closeTime, ...]
+            rows.append({
+                "timestamp": pd.to_datetime(k[0], unit="ms", utc=True),
+                "open": float(k[1]),
+                "high": float(k[2]),
+                "low": float(k[3]),
+                "close": float(k[4]),
+                "volume": float(k[5]),
+            })
+        df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
+        return df
+    except Exception:
+        return None
+
+def _postprocess_realtime_df(df: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """Make sure columns/types/order match REQUIRED_COLUMNS and clean like strict readers."""
+    if df is None or df.empty:
+        return None
+    try:
+        df = df.loc[:, list(REQUIRED_COLUMNS)]
+        df = _parse_and_clean_strict(df)
+        _validate_monotonic(df, "realtime")
+        df = df.astype({
+            "open": "float64", "high": "float64",
+            "low": "float64", "close": "float64", "volume": "float64",
+        })
+        return df
+    except Exception:
+        return None
+
+def _fetch_from_providers(symbol: str, tf: str, limit: int) -> Optional[pd.DataFrame]:
+    """
+    Try providers in order from REALTIME_PROVIDERS.
+    Currently implemented: 'binance'
+    Others will be skipped (placeholder for future).
+    """
+    interval = _tf_to_exchange_interval(tf)
+    for p in REALTIME_PROVIDERS:
+        if p == "binance":
+            df = _fetch_ohlcv_binance(symbol, interval, limit)
+        else:
+            # Placeholder for future providers: okx/bybit/etc.
+            df = None
+
+        df = _postprocess_realtime_df(df) if df is not None else None
+        if df is not None and not df.empty:
+            return df
+    return None
+
+
 # ---- Main ----
 def get_data(
     symbol: str,
@@ -181,13 +264,26 @@ def get_data(
     engine: str = "openpyxl",
 ) -> pd.DataFrame:
     """
-    Load OHLCV data from Excel; fallback to CSV in app/data when Excel sheet missing.
-    - ถ้า 1W ไม่มี → resample จาก 1D (Excel หรือ CSV)
+    Load OHLCV data.
+
+    Modes:
+      - Default (REALTIME != '1'): Excel → CSV → (for 1W) resample from 1D
+      - Real-time (REALTIME == '1'): Provider chain (e.g., Binance). If all providers fail → fallback to files.
+
+    Returns DataFrame with columns: timestamp(UTC), open, high, low, close, volume
     """
     tf_u = tf.upper()
     if tf_u not in SUPPORTED_TF:
         raise ValueError(f"Unsupported timeframe '{tf}'. Supported: {SUPPORTED_TF}")
 
+    # ========= CHANGE: Real-time first if enabled =========
+    if REALTIME_ON:
+        df_rt = _fetch_from_providers(symbol, tf_u, REALTIME_LIMIT)
+        if df_rt is not None and not df_rt.empty:
+            return df_rt
+        # ถ้า API ล้มเหลว → ตกกลับไปใช้ไฟล์ต่อด้านล่าง
+
+    # ========= Original file-based flow (unchanged) =========
     # 1) ลอง Excel ก่อน
     path = xlsx_path or DATA_PATH_DEFAULT
 
