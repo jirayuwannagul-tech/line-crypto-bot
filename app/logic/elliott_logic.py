@@ -1,15 +1,14 @@
 # app/logic/elliott_logic.py
 # ============================================================
-# Logic layer: เสริม "สมอง" สำหรับจัดหมวด kind ของ Elliott
+# Logic layer: สมองของ Elliott บน TF ย่อย (เช่น 1D)
 # - enrich_context: คำนวณ EMA slope, ATR%, recent_direction, swing_fail
 # - map_kind: แปลงผล pattern + context → kind (IMPULSE_TOP / IMPULSE_PROGRESS / CORRECTION / UNKNOWN)
-# - classify_elliott_with_kind: wrapper ที่เรียก base classify → enrich → map_kind
-# - classify_elliott: Public API (ให้ tests import) คืนโครงสร้างเดียวกัน
-# - _call_base_classify: ตัวเรียกใช้งาน classify_elliott (ถ้ามี) หรือ fallback ไป analysis layer
+# - classify_elliott_with_kind: wrapper → enrich → map_kind
+# - classify_elliott: Public API (คืน dict + meta สำหรับ TF/degree)
+# - blend_with_weekly_context: รวม context จาก TF1W (ภาพใหญ่ลุงโฉลก)
 # ============================================================
 
 from __future__ import annotations
-
 from typing import Any, Dict, Mapping, Sequence, Optional
 import pandas as pd
 
@@ -18,6 +17,7 @@ __all__ = [
     "classify_elliott_with_kind",
     "enrich_context",
     "map_kind",
+    "blend_with_weekly_context",
 ]
 
 # -------------------- Utilities --------------------
@@ -29,13 +29,6 @@ def _coerce_to_df(
     close_key: str = "close",
     date_key: Optional[str] = "date",
 ) -> pd.DataFrame:
-    """
-    แปลง input ให้เป็น DataFrame ที่มีคอลัมน์อย่างน้อย: high/low/close
-    รองรับรูปแบบ:
-      - pandas.DataFrame ที่มีคอลัมน์ตรงชื่อ
-      - Mapping[str, Sequence] เช่น {"high":[...], "low":[...], "close":[...]}
-      - Sequence[float] → จะ map เป็น close ล้วน (mock high/low จาก close)
-    """
     if isinstance(data, pd.DataFrame):
         df = data.copy()
     elif isinstance(data, Mapping):
@@ -45,7 +38,6 @@ def _coerce_to_df(
     else:
         raise TypeError("Unsupported input type for Elliott classification")
 
-    # Normalization ชื่อคอลัมน์
     cols_lower = {c.lower(): c for c in df.columns}
     def _ensure_col(name: str):
         if name in df.columns:
@@ -59,29 +51,23 @@ def _coerce_to_df(
     _ensure_col(low_key)
     _ensure_col(close_key)
 
-    # ถ้ายังไม่มี high/low ให้ mock จาก close
     if high_key not in df.columns and close_key in df.columns:
         df[high_key] = df[close_key]
     if low_key not in df.columns and close_key in df.columns:
         df[low_key] = df[close_key]
 
-    # ตรวจขั้นต่ำ
-    needed = {high_key, low_key, close_key}
-    if not needed.issubset(df.columns):
-        raise ValueError(f"Missing columns for Elliott classification: need {needed}, got {list(df.columns)}")
+    if not {high_key, low_key, close_key}.issubset(df.columns):
+        raise ValueError("Missing columns for Elliott classification")
 
-    # sort by date ถ้ามี
     dk = date_key if date_key and date_key in df.columns else None
     if dk:
         df = df.sort_values(dk).reset_index(drop=True)
     else:
         df = df.reset_index(drop=True)
 
-    # ตัดข้อมูลให้ไม่เกิน 600 แท่ง เพื่อความเร็ว
     if len(df) > 600:
         df = df.tail(600).reset_index(drop=True)
     return df
-
 
 # -------------------- Indicators --------------------
 def _ema(series: pd.Series, span: int = 20) -> pd.Series:
@@ -95,14 +81,8 @@ def _atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     return tr.ewm(alpha=1/period, adjust=False).mean()
 
-
 # -------------------- Base classify resolver --------------------
 def _call_base_classify(df: pd.DataFrame) -> Dict[str, Any]:
-    """
-    พยายามใช้ classify_elliott (ถ้ามีในสโคปปัจจุบัน); ถ้าไม่มีก็ fallback ไป analysis layer
-    คืนโครงสร้างมาตรฐานแบบ dict
-    """
-    # 1) ใช้ classify_elliott จากสโคปปัจจุบัน (ถ้ามี)
     try:
         base_fn = classify_elliott  # type: ignore[name-defined]
     except NameError:
@@ -114,11 +94,10 @@ def _call_base_classify(df: pd.DataFrame) -> Dict[str, Any]:
             if isinstance(out, dict):
                 return out
         except Exception:
-            pass  # ให้ fallback ต่อด้านล่าง
+            pass
 
-    # 2) Fallback: ใช้ rules ใน analysis layer
     try:
-        from app.analysis import elliott as ew  # import ภายในเพื่อหลีกเลี่ยงวงจรอิมพอร์ต
+        from app.analysis import elliott as ew
         raw = None
         if hasattr(ew, "analyze_elliott"):
             raw = ew.analyze_elliott(df, min_swing_pct=3.0, strict_impulse=True, allow_overlap=False)
@@ -136,24 +115,14 @@ def _call_base_classify(df: pd.DataFrame) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # 3) สุดท้ายจริง ๆ
     return {"pattern": "UNKNOWN", "completed": False, "current": {}, "rules": [], "debug": {}}
-
 
 # -------------------- Context enrichment --------------------
 def enrich_context(df_ctx: pd.DataFrame, det: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    เติมข้อมูล context ลง det['current']:
-    - ema20_slope  : ค่าชัน EMA20 (อัตราส่วนระหว่างแท่งปัจจุบันกับ 5 แท่งก่อน)
-    - atr_pct      : ATR เทียบกับ close
-    - recent_direction : up/down/side จากการเปรียบเทียบ 5 แท่ง
-    - swing_fail   : อยู่ใต้ EMA20 และทำ Lower High เมื่อเทียบกับ high ย้อนหลัง
-    """
     if not isinstance(det, dict):
         return det
     cur = det.get("current", {}) or {}
 
-    # ---------- เคสข้อมูลน้อย: ใส่ค่าพื้นฐานให้ครบเพื่อกัน KeyError ----------
     if df_ctx is None or len(df_ctx) < 25:
         direction = "side"
         try:
@@ -174,11 +143,9 @@ def enrich_context(df_ctx: pd.DataFrame, det: Dict[str, Any]) -> Dict[str, Any]:
         cur.setdefault("recent_direction", direction)
         cur.setdefault("swing_fail", False)
         cur.setdefault("direction", cur.get("direction", direction))
-
         det["current"] = cur
         return det
 
-    # ---------- เคสข้อมูลพอ: คำนวณเต็ม ----------
     df = df_ctx.sort_values("date").tail(120).reset_index(drop=True) if "date" in df_ctx.columns \
          else df_ctx.tail(120).reset_index(drop=True)
     close = df["close"]
@@ -210,17 +177,11 @@ def enrich_context(df_ctx: pd.DataFrame, det: Dict[str, Any]) -> Dict[str, Any]:
     cur.setdefault("recent_direction", recent_direction)
     cur.setdefault("swing_fail", swing_fail)
     cur.setdefault("direction", cur.get("direction", recent_direction))
-
     det["current"] = cur
     return det
 
-
 # -------------------- Mapping to "kind" --------------------
 def map_kind(det: Dict[str, Any]) -> str:
-    """
-    ตัดสิน kind (IMPULSE_TOP / IMPULSE_PROGRESS / CORRECTION / UNKNOWN)
-    จากผล pattern + context ของ logic เดิม
-    """
     patt = str(det.get("pattern", "")).upper()
     cur  = det.get("current", {}) or {}
 
@@ -233,34 +194,25 @@ def map_kind(det: Dict[str, Any]) -> str:
     atr_pct     = float(cur.get("atr_pct", 0.0))
     swing_fail  = bool(cur.get("swing_fail", False))
 
-    # ---------- UNKNOWN / DIAGONAL ----------
     if patt in {"UNKNOWN", "DIAGONAL"}:
         slope_abs = abs(ema_slope)
-
         if conf >= 0.55:
             return "CORRECTION" if recent_dir == "down" else "IMPULSE_PROGRESS"
-
         if ema_slope >= 0.01 and recent_dir == "up":
             return "IMPULSE_PROGRESS"
         if ema_slope <= -0.01 and recent_dir == "down":
             return "CORRECTION"
-
         if swing_fail and recent_dir != "up":
             return "IMPULSE_TOP"
-
         if atr_pct >= 0.02 and slope_abs >= 0.005:
             return "IMPULSE_PROGRESS" if recent_dir == "up" else "CORRECTION"
-
         if atr_pct < 0.005 and slope_abs < 5e-4:
             return "CORRECTION"
-
         return "UNKNOWN"
 
-    # ---------- CORRECTION family ----------
     if "CORRECTION" in stage or "WXY" in stage or patt in {"DOUBLE_THREE", "ZIGZAG", "FLAT", "TRIANGLE", "CORRECTION"}:
         return "CORRECTION"
 
-    # ---------- IMPULSE family ----------
     if "IMPULSE" in patt or "IMPULSE" in stage or "W5" in stage:
         if completed or "TOP" in stage:
             return "IMPULSE_TOP"
@@ -277,12 +229,32 @@ def map_kind(det: Dict[str, Any]) -> str:
 
     return "UNKNOWN"
 
+# -------------------- Multi-timeframe blending --------------------
+def blend_with_weekly_context(det_daily: Dict[str, Any], det_weekly: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Blend context จาก Weekly → Daily
+    - ถ้า weekly = Impulse → เพิ่ม weight ฝั่ง UP
+    - ถ้า weekly = Correction → เพิ่ม weight ฝั่ง DOWN/SIDE
+    """
+    if not det_weekly or not isinstance(det_weekly, dict):
+        return det_daily
+
+    wk_kind = str(det_weekly.get("kind", "UNKNOWN")).upper()
+    cur = det_daily.get("current", {}) or {}
+    cur["weekly_kind"] = wk_kind
+
+    if wk_kind == "IMPULSE_PROGRESS":
+        cur["weekly_bias"] = "up"
+    elif wk_kind == "CORRECTION":
+        cur["weekly_bias"] = "down"
+    else:
+        cur["weekly_bias"] = "neutral"
+
+    det_daily["current"] = cur
+    return det_daily
 
 # -------------------- Public API --------------------
-def classify_elliott_with_kind(df: pd.DataFrame) -> Dict[str, Any]:
-    """
-    เรียก base classify (ถ้ามี) หรือ fallback → enrich_context → map_kind → เพิ่ม key 'kind'
-    """
+def classify_elliott_with_kind(df: pd.DataFrame, *, timeframe: str = "1D", degree: str = "intermediate", weekly_det: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     out = _call_base_classify(df)
     if not isinstance(out, dict):
         out = {"pattern": "UNKNOWN", "completed": False, "current": {}}
@@ -290,14 +262,14 @@ def classify_elliott_with_kind(df: pd.DataFrame) -> Dict[str, Any]:
     out = enrich_context(df, out)
     kind = map_kind(out)
     out["kind"] = kind
+
+    # meta
+    out["meta"] = {"timeframe": timeframe, "degree": degree}
+
+    # blend weekly context if provided
+    out = blend_with_weekly_context(out, weekly_det)
     return out
 
-
-def classify_elliott(data: Any) -> Dict[str, Any]:
-    """
-    Public API ที่ tests จะ import:
-      - รับข้อมูลได้หลากหลาย → แปลงเป็น DataFrame
-      - คืน dict ที่มี key 'kind' เสมอ
-    """
+def classify_elliott(data: Any, *, timeframe: str = "1D", degree: str = "intermediate", weekly_det: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     df = _coerce_to_df(data)
-    return classify_elliott_with_kind(df)
+    return classify_elliott_with_kind(df, timeframe=timeframe, degree=degree, weekly_det=weekly_det)

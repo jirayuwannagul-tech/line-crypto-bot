@@ -9,12 +9,10 @@ _DEFAULT_VS = os.getenv("QUOTE_ASSET", "USDT").upper()
 _PROVIDER   = os.getenv("PRICE_PROVIDER", "binance").lower()  # binance|coingecko
 _PRICE_TTL  = int(os.getenv("PRICE_TTL_SECONDS", "15"))
 _BINANCE_HOSTS = [
-    # primary แล้วตามด้วยสำรอง
     os.getenv("BINANCE_HOST", "https://api.binance.com"),
     "https://api1.binance.com",
     "https://api2.binance.com",
     "https://api3.binance.com",
-    # mirror อ่านอย่างเดียวของ Binance (ตลาด spot)
     "https://data-api.binance.vision",
 ]
 
@@ -34,46 +32,32 @@ def _set_cache(symbol: str, vs: str, price: float) -> None:
     _price_cache[_cache_key(symbol, vs)] = (price, time.time())
 
 async def _get_price_binance(symbol: str, vs: str) -> Optional[float]:
-    """ลองยิงหลายโฮสต์ของ Binance กัน 451/403/เครือข่ายพัง"""
     pair = f"{symbol.upper()}{vs.upper()}"
     params = {"symbol": pair}
-    headers = {"User-Agent": "line-crypto-bot/1.0"}  # กันบาง proxy บล็อก UA ว่าง
-    backoffs = [0.5, 1.0]  # retry เฉพาะ 429 ภายในโฮสต์เดียว
+    headers = {"User-Agent": "line-crypto-bot/1.0"}
+    backoffs = [0.5, 1.0]
 
     for base in _BINANCE_HOSTS:
         url = f"{base.rstrip('/')}/api/v3/ticker/price"
-        # ลองยิง 1 + backoff เมื่อโดน 429
-        for attempt, wait in enumerate([0.0] + backoffs):
+        for wait in [0.0] + backoffs:
             if wait:
                 await asyncio.sleep(wait)
             try:
                 async with httpx.AsyncClient(timeout=10) as client:
                     r = await client.get(url, params=params, headers=headers)
             except httpx.RequestError:
-                # ปัญหาเครือข่าย → ลองรอบถัดไป/โฮสต์ถัดไป
                 continue
-
-            sc = r.status_code
-            if sc == 200:
+            if r.status_code == 200:
                 try:
                     j = r.json()
                     return float(j["price"])
                 except Exception:
-                    # รูปแบบไม่คาดคิด → ลองโฮสต์ถัดไป
                     break
-
-            # geofence/forbidden/not found/bad req → โฮสต์ถัดไป
-            if sc in (400, 403, 404, 451):
+            if r.status_code in (400, 403, 404, 451):
                 break
-
-            # rate limit → ลองใหม่ตาม backoff ถ้าครบแล้วยังไม่ไหวค่อยเปลี่ยนโฮสต์
-            if sc == 429:
+            if r.status_code == 429:
                 continue
-
-            # สถานะอื่น ๆ → เปลี่ยนโฮสต์
             break
-
-    # ทุกโฮสต์ล้มเหลว
     return None
 
 async def _get_price_coingecko(symbol: str, vs: str) -> Optional[float]:
@@ -106,7 +90,6 @@ async def get_price(symbol: str, vs: str | None = None) -> Optional[float]:
 
     order = [_PROVIDER, "coingecko" if _PROVIDER == "binance" else "binance"]
     price: Optional[float] = None
-
     for prov in order:
         if prov == "binance":
             price = await _get_price_binance(symbol, vs)
@@ -114,7 +97,6 @@ async def get_price(symbol: str, vs: str | None = None) -> Optional[float]:
             price = await _get_price_coingecko(symbol, vs)
         if price is not None:
             break
-
     if price is not None:
         _set_cache(symbol, vs, price)
     return price
@@ -127,9 +109,19 @@ async def get_price_text(symbol: str, vs: str | None = None) -> str:
     unit = "USD" if vs in ("USD", "USDT") else vs
     return f"💰 ราคา {symbol.upper()} ล่าสุด: {price:,.2f} {unit}"
 
-# --- compat ---
+# --- compat (async) ---
 async def get_price_usd(symbol: str) -> Optional[float]:
     return await get_price(symbol, "USDT")
+
+# --- compat (sync wrapper สำหรับ LINE webhook) ---
+def fetch_price_text(symbol: str, vs: str | None = None) -> str:
+    """เรียกใช้งาน get_price_text ในรูปแบบ synchronous"""
+    try:
+        return asyncio.run(get_price_text(symbol, vs))
+    except RuntimeError:
+        # ถ้า event loop เปิดอยู่ (เช่นใน FastAPI) → ใช้ run_until_complete
+        loop = asyncio.get_event_loop()
+        return loop.run_until_complete(get_price_text(symbol, vs))
 
 class _NoopResolver:
     async def refresh(self, force: bool = False) -> bool:

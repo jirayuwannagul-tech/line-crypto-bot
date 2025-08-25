@@ -1,9 +1,10 @@
+# app/routers/line_webhook.py
 # =============================================================================
 # LAYER A) OVERVIEW (FastAPI Router for LINE Webhook)
 # -----------------------------------------------------------------------------
 # หน้าที่:
 # - รับ Webhook จาก LINE Messaging API
-# - แยกข้อความผู้ใช้ → สั่งวิเคราะห์ผ่าน service → ตอบกลับ
+# - แยกข้อความผู้ใช้ → สั่งวิเคราะห์ผ่าน engine → ตอบกลับ
 # - รองรับคำสั่งโปรไฟล์ เช่น: "analyze BTCUSDT 1D profile:chinchot"
 #   ค่าดีฟอลต์: symbol=BTCUSDT, tf=1D, profile=baseline
 # =============================================================================
@@ -16,8 +17,9 @@ import logging
 
 from fastapi import APIRouter, Request, HTTPException
 
-from app.services import signal_service
+from app.engine.signal_engine import build_line_text, build_signal_payload
 from app.adapters.delivery_line import LineDelivery
+from app.utils.crypto_price import fetch_price_text  # ✅ ใช้ utils ของเราแทน signal_service เก่า
 
 router = APIRouter()
 log = logging.getLogger(__name__)
@@ -25,10 +27,6 @@ log = logging.getLogger(__name__)
 # =============================================================================
 # LAYER B) ENV & CLIENT
 # -----------------------------------------------------------------------------
-# - ใช้ access token/secret จาก ENV (ถ้าไม่มี ให้ raise 400 ตอน runtime เพื่อชัดเจน)
-# - คลาส LineDelivery เป็นตัวห่อ (adapter) สำหรับ reply/push
-# =============================================================================
-
 def _get_env(name: str, default: Optional[str] = None) -> Optional[str]:
     v = os.getenv(name, default)
     return v if v not in (None, "") else default
@@ -36,7 +34,6 @@ def _get_env(name: str, default: Optional[str] = None) -> Optional[str]:
 CHANNEL_ACCESS_TOKEN = _get_env("LINE_CHANNEL_ACCESS_TOKEN")
 CHANNEL_SECRET = _get_env("LINE_CHANNEL_SECRET")
 
-# สร้าง client หนึ่งตัวใช้ร่วมกัน
 _line_client: Optional[LineDelivery] = None
 def _client() -> LineDelivery:
     global _line_client
@@ -49,54 +46,37 @@ def _client() -> LineDelivery:
 # =============================================================================
 # LAYER C) COMMAND PARSER
 # -----------------------------------------------------------------------------
-# รองรับรูปแบบ:
-#   "analyze BTCUSDT 1D profile:chinchot"
-#   "analyze ethusdt 4h"
-#   "btc 1d"
-#   "ราคา btc"
-#   ไม่มีคำสั่ง → ใช้ค่า default
-# =============================================================================
-
 _SYM_RE = r"[A-Z0-9:\-/]{3,20}"
 
 def _parse_text(text: str) -> Dict[str, str]:
     t = (text or "").strip()
     t_upper = t.upper()
 
-    # defaults
     symbol = "BTCUSDT"
     tf = "1D"
     profile = "baseline"
 
-    # profile:<name>
     m_prof = re.search(r"profile:([a-zA-Z0-9_\-]+)", t, flags=re.IGNORECASE)
     if m_prof:
         profile = m_prof.group(1).strip()
 
-    # pattern 1: "analyze SYMBOL TF ..."
     m1 = re.search(rf"\banalyze\s+({_SYM_RE})\s+([0-9]+[HDW])\b", t_upper)
     if m1:
         symbol = m1.group(1).replace(":", "").replace("/", "")
         tf = m1.group(2).upper()
         return {"symbol": symbol, "tf": tf, "profile": profile}
 
-    # pattern 2: "SYMBOL TF"
     m2 = re.search(rf"\b({_SYM_RE})\s+([0-9]+[HDW])\b", t_upper)
     if m2:
         symbol = m2.group(1).replace(":", "").replace("/", "")
         tf = m2.group(2).upper()
         return {"symbol": symbol, "tf": tf, "profile": profile}
 
-    # fallbacks
     return {"symbol": symbol, "tf": tf, "profile": profile}
 
 # =============================================================================
 # LAYER D) WEBHOOK HANDLER
-# -----------------------------------------------------------------------------
-# LINE จะเรียก POST /line/webhook ด้วย body ตาม spec (events[])
-# เราอ่าน text จาก message event → วิเคราะห์ → reply token
 # =============================================================================
-
 @router.post("/line/webhook")
 async def line_webhook(request: Request) -> Dict[str, Any]:
     try:
@@ -106,15 +86,12 @@ async def line_webhook(request: Request) -> Dict[str, Any]:
 
     events = (body or {}).get("events", [])
     if not events:
-        # เงียบ ๆ แต่ตอบ 200 ให้ LINE ไม่รีไทร
         return {"ok": True}
 
     for ev in events:
         try:
-            ev_type = ev.get("type")
-            if ev_type != "message":
+            if ev.get("type") != "message":
                 continue
-
             msg = ev.get("message", {})
             if msg.get("type") != "text":
                 continue
@@ -122,9 +99,8 @@ async def line_webhook(request: Request) -> Dict[str, Any]:
             user_text = msg.get("text", "").strip()
             reply_text = None
 
-            # 👉 ใหม่: ถ้าผู้ใช้พิมพ์ "ราคา ..."
+            # 👉 "ราคา BTC"
             if user_text.lower().startswith("ราคา"):
-                # แยก symbol (default=BTC/USDT)
                 parts = user_text.split()
                 if len(parts) >= 2:
                     sym = parts[1].upper()
@@ -132,18 +108,14 @@ async def line_webhook(request: Request) -> Dict[str, Any]:
                         sym = sym + "USDT"
                 else:
                     sym = "BTCUSDT"
-                reply_text = signal_service.fetch_price_text(sym)
+                reply_text = fetch_price_text(sym)
 
             else:
-                # 👉 เดิม: ใช้ engine วิเคราะห์
+                # 👉 วิเคราะห์สัญญาณ
                 args = _parse_text(user_text)
-                symbol = args["symbol"]
-                tf = args["tf"]
-                profile = args["profile"]
+                symbol, tf, profile = args["symbol"], args["tf"], args["profile"]
+                reply_text = build_line_text(symbol, tf, profile=profile)
 
-                reply_text = signal_service.analyze_and_get_text(symbol, tf, profile=profile)
-
-            # ส่งกลับผ่าน replyToken
             reply_token = ev.get("replyToken")
             if reply_token and reply_text:
                 _client().reply_text(reply_token, reply_text)
