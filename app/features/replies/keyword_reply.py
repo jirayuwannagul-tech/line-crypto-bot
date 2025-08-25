@@ -33,6 +33,9 @@ KEYWORD_MAP = {
         "Note: Test data only."
     ),
 
+    # ----- คำสั่งเช็กบอท -----
+    "ping": "✅ Bot online (24/7)",
+
     # ===== ชุด BTC/สำนวนกวน ๆ ตัวอย่าง =====
     "btc": "BTC นี่มันคาสิโนชัด ๆ 🎰",
     "เปิดลอค": "เปิดลอคทีไร เจ๊งทุกที 😭",
@@ -80,15 +83,6 @@ _PRICE_CMD = re.compile(
 )
 
 def parse_price_command(text: str) -> Optional[str]:
-    """
-    ตรวจข้อความ ถ้า match pattern 'ราคา XXX' หรือ 'price XXX'
-    → return symbol เป็น XXXUSDT
-    เช่น:
-      'ราคา BTC' → 'BTCUSDT'
-      'price eth' → 'ETHUSDT'
-      'ราคา BTCUSDT' → 'BTCUSDT'
-    ถ้าไม่ match → return None
-    """
     if not text:
         return None
     m = _PRICE_CMD.search(text.strip())
@@ -102,7 +96,6 @@ def parse_price_command(text: str) -> Optional[str]:
 _ANALYZE_MOCK = re.compile(r'^(?:mock|วิเคราะห์\s*mock)\s*$', re.IGNORECASE)
 
 def parse_analysis_mock(text: str) -> bool:
-    """คืน True ถ้าผู้ใช้พิมพ์ 'mock' หรือ 'วิเคราะห์ mock'"""
     if not text:
         return False
     return _ANALYZE_MOCK.search(text.strip()) is not None
@@ -122,13 +115,6 @@ _ANALYZE_CMD = re.compile(
 )
 
 def parse_analyze_command(text: str) -> Optional[tuple[str, str]]:
-    """
-    ตรวจจับคำสั่งวิเคราะห์ เช่น:
-      'วิเคราะห์ BTCUSDT 1H'
-      'analyze BTC 1d'
-      'วิเคราะห์ BTC/USDT 4h'
-    คืนค่า (symbol, tf) โดย normalize symbol และ tf
-    """
     if not text:
         return None
     m = _ANALYZE_CMD.match(text.strip())
