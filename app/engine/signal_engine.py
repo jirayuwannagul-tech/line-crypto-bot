@@ -40,7 +40,9 @@ class SignalEngine:
         self.cfg: Dict[str, Any] = base_cfg
         self.xlsx_path = xlsx_path
 
+        # state ต่อ symbol (สำหรับ compat engine)
         self._state: Dict[str, Dict[str, Any]] = {}
+        # ให้เทสเข้าถึง/แก้ last_signal_ts และอ่าน last_alert_price ได้
         self._states: Dict[str, SimpleNamespace] = {}
 
     # --------- LINE / Wave facade ---------
@@ -168,7 +170,7 @@ class SignalEngine:
 
         # (3) เตรียมค่า
         st = self._st(symbol)
-        ns = self._states.setdefault(symbol, SimpleNamespace(last_signal_ts=0))
+        ns = self._states.setdefault(symbol, SimpleNamespace(last_signal_ts=0, last_alert_price=None))
 
         ts_now = self._last_ts(df)
         close = float(df["close"].iloc[-1])
@@ -215,7 +217,7 @@ class SignalEngine:
                 st.update({"pos": "NONE", "entry": None, "tp": None, "sl": None, "move_anchor": None})
                 if cooldown_sec > 0 and ts_now is not None:
                     st["cooldown_until"] = ts_now + pd.Timedelta(seconds=cooldown_sec)
-                out.update({"action": "CLOSE", "pos": "NONE", "entry": entry, "tp": tp, "sl": sl, "reason": "tp_hit"})
+                out.update({"action": "CLOSE", "pos": "NONE", "entry": entry, "tp": tp, "sl": sl, "reason": "exit_tp"})
                 return self._pack(out, pos_side="NONE")
 
             # SL
@@ -223,7 +225,7 @@ class SignalEngine:
                 st.update({"pos": "NONE", "entry": None, "tp": None, "sl": None, "move_anchor": None})
                 if cooldown_sec > 0 and ts_now is not None:
                     st["cooldown_until"] = ts_now + pd.Timedelta(seconds=cooldown_sec)
-                out.update({"action": "CLOSE", "pos": "NONE", "entry": entry, "tp": tp, "sl": sl, "reason": "sl_hit"})
+                out.update({"action": "CLOSE", "pos": "NONE", "entry": entry, "tp": tp, "sl": sl, "reason": "exit_sl"})
                 return self._pack(out, pos_side="NONE")
 
             # ยังถืออยู่
@@ -242,6 +244,9 @@ class SignalEngine:
             tp = entry + rr * risk_dist
 
             st.update({"pos": "LONG", "entry": float(entry), "tp": float(tp), "sl": float(sl), "move_anchor": float(entry)})
+            # set last_alert_price เริ่มต้นเป็นราคาเข้า
+            ns.last_alert_price = float(entry)
+
             out.update({"action": "OPEN", "pos": "LONG", "entry": entry, "tp": tp, "sl": sl, "reason": "sma_fast_gt_slow_and_green"})
             return self._pack(out, pos_side="LONG", entry=entry, tp=tp, sl=sl)
 
@@ -256,13 +261,18 @@ class SignalEngine:
             return alerts_out
 
         st = self._st(symbol)
+        ns = self._states.setdefault(symbol, SimpleNamespace(last_signal_ts=0, last_alert_price=None))
         anchor = st.get("move_anchor")
+
+        # ตั้ง anchor / last_alert_price เริ่มต้น
         if anchor is None or (not isinstance(anchor, (int, float))):
             st["move_anchor"] = float(last_price)
+            ns.last_alert_price = float(last_price)
             return alerts_out
 
         if anchor <= 0:
             st["move_anchor"] = float(last_price)
+            ns.last_alert_price = float(last_price)
             return alerts_out
 
         chg = (last_price - anchor) / anchor
@@ -274,6 +284,7 @@ class SignalEngine:
             if chg >= thv:
                 alerts_out.append(f"MOVE_ALERT:+{int(thv*100)}% reached (from {anchor:,.2f} to {last_price:,.2f})")
                 st["move_anchor"] = float(last_price)
+                ns.last_alert_price = float(last_price)  # อัปเดตทุกครั้งที่ทริกเกอร์
         return alerts_out
 
 
