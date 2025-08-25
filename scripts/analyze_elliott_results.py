@@ -1,26 +1,39 @@
 import pandas as pd
-from sklearn.metrics import confusion_matrix, classification_report
 
-# โหลดไฟล์
+# โหลดไฟล์ผล backtest
 df = pd.read_csv("backtest/results_elliott.csv")
 
-# ความแม่นยำรวม
+# --- 1) สร้าง mapping จากคลื่น -> ทิศทางตลาด ---
+mapping = {
+    "IMPULSE_PROGRESS": "UP",
+    "IMPULSE_TOP": "UP",
+    "CORRECTION": "DOWN"
+}
+
+# แปลง prediction จาก Elliott wave ให้เป็นทิศทาง
+df["pred_direction"] = df["trend_pred"].map(mapping).fillna("UNKNOWN")
+
+# --- 2) คำนวณ hit ใหม่ (เปรียบเทียบกับ real_trend: UP/DOWN) ---
+df["hit_mapped"] = (df["pred_direction"] == df["real_trend"]).astype(int)
+
+# --- 3) ความแม่นยำรวม ---
 total = len(df)
-correct = df['hit'].sum()
+correct = df["hit_mapped"].sum()
 accuracy = correct / total * 100
-print(f"Total: {total}, Correct: {correct}, Accuracy: {accuracy:.2f}%")
 
-# ความแม่นยำแยกตามคลื่น
-print("\nAccuracy by Wave Type:")
-print(df.groupby("trend_pred")["hit"].mean() * 100)
+print("===== Elliott Wave Backtest (Mapped to UP/DOWN) =====")
+print(f"Total: {total}")
+print(f"Correct: {correct}")
+print(f"Accuracy: {accuracy:.2f}%")
 
-# --- ✅ แก้ตรงนี้: บังคับให้เป็น string ---
-y_true = df["real_trend"].astype(str)
-y_pred = df["trend_pred"].astype(str)
+# --- 4) ความแม่นยำแยกตาม pred_direction ---
+print("\nAccuracy by Direction:")
+print(df.groupby("pred_direction")["hit_mapped"].mean() * 100)
 
-# Confusion Matrix
-print("\nConfusion Matrix:")
-print(confusion_matrix(y_true, y_pred, labels=y_true.unique()))
+# --- 5) Confusion Table (เปรียบเทียบจริง vs ทำนาย) ---
+print("\nConfusion Table (Actual vs Predicted):")
+print(pd.crosstab(df["real_trend"], df["pred_direction"], rownames=["Actual"], colnames=["Predicted"]))
 
-print("\nClassification Report:")
-print(classification_report(y_true, y_pred))
+# --- 6) แสดงตัวอย่างผลลัพธ์บางส่วน ---
+print("\nSample Predictions:")
+print(df[["date", "trend_pred", "pred_direction", "real_trend", "hit_mapped"]].head(20))
