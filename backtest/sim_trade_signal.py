@@ -15,6 +15,7 @@ from typing import Dict, Optional, Tuple
 # import ฟังก์ชันจากโปรเจกต์
 from app.logic.scenarios import analyze_scenarios
 from app.analysis.timeframes import get_data
+from app.adapters.delivery_line import push_message  # ✅ ส่งเข้า LINE
 
 TP_PCTS = [0.03, 0.05, 0.07]
 SL_PCT = 0.03
@@ -194,3 +195,10 @@ if __name__ == "__main__":
 
     plan = build_trade_plan(event, price_info)
     print(plan)
+
+    # ✅ ส่งเข้า LINE โดยใช้ LINE_USER_ID จาก .env เป็นปลายทาง
+    try:
+        push_message(plan)
+        print("✅ ส่งเข้า LINE เรียบร้อย")
+    except Exception as e:
+        print(f"⚠️ ส่งเข้า LINE ไม่สำเร็จ: {e}")
