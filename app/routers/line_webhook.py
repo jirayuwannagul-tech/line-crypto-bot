@@ -5,8 +5,11 @@
 # หน้าที่:
 # - รับ Webhook จาก LINE Messaging API
 # - แยกข้อความผู้ใช้ → สั่งวิเคราะห์ผ่าน engine → ตอบกลับ
-# - รองรับคำสั่งโปรไฟล์ เช่น: "analyze BTCUSDT 1D profile:chinchot"
-#   ค่าดีฟอลต์: symbol=BTCUSDT, tf=1D, profile=baseline
+# - รองรับ:
+#   * คำสั่ง keyword (สวัสดี, mock, btc, ฯลฯ)
+#   * "ราคา BTC"
+#   * "analyze BTCUSDT 1D"
+#   * profile:xxx
 # =============================================================================
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ from fastapi import APIRouter, Request, HTTPException
 from app.engine.signal_engine import build_line_text, build_signal_payload
 from app.adapters.delivery_line import LineDelivery
 from app.utils.crypto_price import fetch_price_text  # ✅ ใช้ utils ของเราแทน signal_service เก่า
+from app.features.replies.keyword_reply import get_reply  # ✅ เพิ่มการเชื่อมกับ keyword layer
 
 router = APIRouter()
 log = logging.getLogger(__name__)
@@ -99,8 +103,11 @@ async def line_webhook(request: Request) -> Dict[str, Any]:
             user_text = msg.get("text", "").strip()
             reply_text = None
 
-            # 👉 "ราคา BTC"
-            if user_text.lower().startswith("ราคา"):
+            # 👉 (1) keyword replies เช่น สวัสดี, mock, btc
+            reply_text = get_reply(user_text)
+
+            # 👉 (2) ราคา BTC
+            if not reply_text and user_text.lower().startswith("ราคา"):
                 parts = user_text.split()
                 if len(parts) >= 2:
                     sym = parts[1].upper()
@@ -110,8 +117,8 @@ async def line_webhook(request: Request) -> Dict[str, Any]:
                     sym = "BTCUSDT"
                 reply_text = fetch_price_text(sym)
 
-            else:
-                # 👉 วิเคราะห์สัญญาณ
+            # 👉 (3) วิเคราะห์สัญญาณ
+            if not reply_text:
                 args = _parse_text(user_text)
                 symbol, tf, profile = args["symbol"], args["tf"], args["profile"]
                 reply_text = build_line_text(symbol, tf, profile=profile)
