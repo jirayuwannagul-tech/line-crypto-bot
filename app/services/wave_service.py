@@ -60,7 +60,7 @@ def analyze_wave(
 ) -> Dict[str, Any]:
     """
     End-to-end analysis:
-      - Load OHLCV from Excel/ccxt
+      - Load OHLCV from Excel (rules-only)
       - Run scenarios analyzer (+ optional Weekly context)
       - Attach TP/SL rules
       - Return payload ready for delivery
@@ -140,6 +140,7 @@ def analyze_wave(
 def build_brief_message(payload: Dict[str, Any]) -> str:
     """
     Create a short summary suitable for LINE messages.
+    Also prints trading plans (A/B/C) at the end for terminal usage.
     Safe even if fields are missing.
     """
     sym = payload.get("symbol", "")
@@ -160,12 +161,14 @@ def build_brief_message(payload: Dict[str, Any]) -> str:
 
     # Optional weekly bias line
     weekly_line = ""
+    wb_for_plan = "?"
     try:
         ell = levels.get("elliott") or {}
         cur = ell.get("current") or {}
         wb = cur.get("weekly_bias")
         if isinstance(wb, str) and wb:
             weekly_line = f" [{wb.upper()} 1W]"
+            wb_for_plan = wb.upper()
     except Exception:
         pass
 
@@ -196,5 +199,53 @@ def build_brief_message(payload: Dict[str, Any]) -> str:
         lines.append("เหตุผลย่อ:")
         for r in rationale[:3]:
             lines.append(f"• {r}")
+
+    # === Trading Plans block (terminal-friendly) ===
+    try:
+        # cast values for math
+        px_val = float(px) if isinstance(px, (int, float)) else float("nan")
+        rh_val = float(rh) if isinstance(rh, (int, float)) else None
+        rl_val = float(rl) if isinstance(rl, (int, float)) else None
+        ema50_val = float(ema50) if isinstance(ema50, (int, float)) else None
+
+        lines.append("")
+        lines.append(f"แผนเทรดที่แนะนำตอนนี้ (Weekly = {wb_for_plan}, 1D bias ขึ้น/ลง/ข้าง = {up}%/{down}%/{side}%)")
+
+        # A) Short – Breakout (ปลอดภัยกว่า): entry = หลุด recent low (rl)
+        if rl_val and rl_val > 0:
+            entry = rl_val
+            lines.append("")
+            lines.append("A) Short – Breakout (ปลอดภัยกว่า)")
+            lines.append(f"Entry: หลุด {entry:,.2f}")
+            # TP/SL fixed percent from entry
+            tp1, tp2, tp3 = entry * 0.97, entry * 0.95, entry * 0.93
+            sl = entry * 1.03
+            lines.append(f"TP1 −3%: {tp1:,.2f} | TP2 −5%: {tp2:,.2f} | TP3 −7%: {tp3:,.2f}")
+            lines.append(f"SL +3%: {sl:,.2f}")
+
+        # B) Short – Pullback (เชิงรุก/RR ดีกว่า): entry = รีเจ็กต์แถว EMA50
+        if ema50_val and ema50_val > 0:
+            entry = ema50_val
+            lines.append("")
+            lines.append("B) Short – Pullback (เชิงรุก/RR ดีกว่า)")
+            lines.append(f"Entry: รีเจ็กต์แถว EMA50 = {entry:,.2f}")
+            tp1, tp2, tp3 = entry * 0.97, entry * 0.95, entry * 0.93
+            sl = entry * 1.03
+            lines.append(f"TP1 −3%: {tp1:,.2f} | TP2 −5%: {tp2:,.2f} | TP3 −7%: {tp3:,.2f}")
+            lines.append(f"SL +3%: {sl:,.2f}")
+
+        # C) Long – แผนสำรอง (ถ้ากลับตัวแรง): entry = ทะลุ recent high (rh)
+        if rh_val and rh_val > 0:
+            entry = rh_val
+            lines.append("")
+            lines.append("C) Long – แผนสำรอง (ถ้ากลับตัวแรง)")
+            lines.append(f"Entry: ทะลุ Recent High = {entry:,.2f}")
+            tp1, tp2, tp3 = entry * 1.03, entry * 1.05, entry * 1.07
+            sl = entry * 0.97
+            lines.append(f"TP1 +3%: {tp1:,.2f} | TP2 +5%: {tp2:,.2f} | TP3 +7%: {tp3:,.2f}")
+            lines.append(f"SL −3%: {sl:,.2f}")
+    except Exception:
+        # อย่าทำให้ข้อความหลักพัง หากคำนวณส่วนเสริมล้มเหลว
+        pass
 
     return "\n".join(lines)
