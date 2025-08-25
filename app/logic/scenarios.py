@@ -182,6 +182,49 @@ def _analyze_dow_safe(df_ind: pd.DataFrame) -> Dict[str, object]:
             trend, conf = "SIDE", 55
     return {"trend_primary": trend, "confidence": conf}
 
+# -------------------------
+# Elliott Guess Heuristic 🆕
+# -------------------------
+def _elliott_guess_when_unknown(
+    *,
+    close: float,
+    ema50: float,
+    ema200: float,
+    recent_low: Optional[float],
+    recent_high: Optional[float],
+    leg_dir: Optional[str],
+) -> str:
+    """
+    คาดเดาอย่างระมัดระวังเมื่อ pattern ยัง UNKNOWN
+    - ถ้าแนวโน้มขาลงเด่น (leg_dir == down) และราคาใกล้/ต่ำกว่า recent_low → เดา Wave 3 ลง
+    - ถ้าขึ้นเด่น (leg_dir == up) และราคาอยู่เหนือ EMA50 และถือ recent_low ได้ → เดา Wave C/3 ขึ้น
+    - ไม่เข้าเงื่อนไข → เดา Side/Triangle
+    """
+    guess = "Side/Triangle (ยังไม่ชัด)"
+    if not (close and ema50 and ema200):
+        return guess
+
+    # safety thresholds
+    near_pct = 0.0045  # ~0.45% ใกล้แนวรับ-ต้าน
+    def _near(x: Optional[float]) -> bool:
+        if x is None or x <= 0:
+            return False
+        return abs(close - x) / x <= near_pct
+
+    if leg_dir == "down":
+        if recent_low and (close < recent_low or _near(recent_low)):
+            return "Wave 3 ลง (ถ้าหลุด Low ต่อเนื่อง)"
+        # ถ้าต่ำกว่า ema50/ema200 ก็ยัง bias ลง
+        if close < ema50 and ema50 <= ema200:
+            return "Wave 3 ลง (โครงสร้าง EMA เอียงลง)"
+    elif leg_dir == "up":
+        if close > ema50 and (recent_low is not None) and (close > recent_low):
+            return "Wave C/3 ขึ้น (ถ้ายืนเหนือ EMA50)"
+        if recent_high and _near(recent_high):
+            return "Wave 5/ต่อเนื่อง ขึ้น (ทดสอบ High)"
+
+    return guess
+
 # =============================================================================
 # Public API
 # =============================================================================
@@ -276,8 +319,31 @@ def analyze_scenarios(
         side_logit += 0.5 * ew_w
         notes.append("Elliott Correction")
     else:
+        # ยัง UNKNOWN → ใส่ UNKNOWN ก่อน
         side_logit += 0.4 * ew_w
         notes.append(f"Elliott {patt}")
+
+        # 🆕 Elliott Guess (heuristic) — ไม่แตะไฟล์กฎ
+        ema50 = float(last.get("ema50", np.nan))
+        ema200 = float(last.get("ema200", np.nan))
+        close = float(last.get("close", np.nan))
+        guess = _elliott_guess_when_unknown(
+            close=close,
+            ema50=ema50 if not math.isnan(ema50) else 0.0,
+            ema200=ema200 if not math.isnan(ema200) else 0.0,
+            recent_low=sw_meta.get("recent_low"),
+            recent_high=sw_meta.get("recent_high"),
+            leg_dir=sw_meta.get("leg_dir"),
+        )
+        notes.append(f"Elliott Guess: {guess}")
+
+        # ให้ logit ขยับเล็กน้อยตาม guess (น้ำหนักนุ่มๆ)
+        if "ลง" in guess:
+            down_logit += 0.25 * ew_w
+        elif "ขึ้น" in guess:
+            up_logit += 0.25 * ew_w
+        else:
+            side_logit += 0.15 * ew_w
 
     # Weekly context blend 🆕
     wk_bias = (ell.get("current") or {}).get("weekly_bias", "neutral")
@@ -291,11 +357,10 @@ def analyze_scenarios(
     # Indicators
     rsi = float(last.get("rsi14", np.nan))
     macd_hist = float(last.get("macd_hist", np.nan))
-    ema50, ema200, close = (
-        float(last.get("ema50", np.nan)),
-        float(last.get("ema200", np.nan)),
-        float(last.get("close", np.nan)),
-    )
+    ema50 = float(last.get("ema50", np.nan))
+    ema200 = float(last.get("ema200", np.nan))
+    close = float(last.get("close", np.nan))
+
     if not math.isnan(rsi):
         if rsi >= float(prof["confirm"]["rsi_bull_min"]):
             up_logit += 0.8 * iw
