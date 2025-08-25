@@ -14,6 +14,10 @@ import requests
 from typing import Dict, Optional, Tuple
 
 import pandas as pd
+from dotenv import load_dotenv  # โหลด .env อัตโนมัติ
+
+# โหลดตัวแปรจาก .env (ถ้ามี)
+load_dotenv()
 
 # === โปรเจกต์ของเรา ===
 from app.logic.scenarios import analyze_scenarios
@@ -41,7 +45,11 @@ def _atr_pct(df: pd.DataFrame, n: int = 14) -> Optional[float]:
 
     trs = []
     for i in range(1, len(df)):
-        tr = max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
+        tr = max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        )
         trs.append(tr)
     atr = pd.Series(trs).rolling(n).mean().iloc[-1]
     last_close = df["close"].iloc[-1]
@@ -97,7 +105,7 @@ def _push_line_text(text: str, to_user: Optional[str] = None) -> None:
 
 
 # ===============================
-# Message Builder
+# Message Builder (ฟอร์แมตอ่านง่าย)
 # ===============================
 def _format_line_message(
     symbol: str,
@@ -123,33 +131,50 @@ def _format_line_message(
 
     # ถ้าไม่มี targets/stop ลอง fallback เป็น % มาตรฐาน
     if not targets and last_close:
-        targets = [round(last_close * (1 + p), 2) if direction == "UP" else round(last_close * (1 - p), 2) for p in TP_PCTS]
+        targets = [
+            round(last_close * (1 + p), 2) if direction == "UP" else round(last_close * (1 - p), 2)
+            for p in TP_PCTS
+        ]
     if stop is None and last_close:
         stop = round(last_close * (1 - SL_PCT), 2) if direction == "UP" else round(last_close * (1 + SL_PCT), 2)
 
     lines = []
-    lines.append(f"🧠 Signal • {symbol} • {tf}")
-    lines.append(f"ราคาล่าสุด: {last_close:,.2f}")
+    lines.append("🧠 Signal Alert")
+    lines.append("━━━━━━━━━━━━━━━━━━")
+    lines.append(f"📊 {symbol} • TF {tf}")
+    lines.append(f"💵 ราคาล่าสุด: {last_close:,.2f}")
+    lines.append("")
+
     if probs:
-        lines.append(f"ความน่าจะเป็น % → ⬆️UP {probs.get('UP','-')} | ⬇️DOWN {probs.get('DOWN','-')} | ➡️SIDE {probs.get('SIDE','-')}")
-    lines.append(f"แผนหลัก: {direction}")
+        # แสดง % แบบแบ่งบรรทัดชัดเจน
+        up = probs.get("UP", "-")
+        dn = probs.get("DOWN", "-")
+        sd = probs.get("SIDE", "-")
+        lines.append("📈 ความน่าจะเป็น")
+        lines.append(f"  ⬆️ UP:   {up}%")
+        lines.append(f"  ⬇️ DOWN: {dn}%")
+        lines.append(f"  ➡️ SIDE: {sd}%")
+        lines.append("")
+
+    lines.append(f"🎯 แผนหลัก: {direction}")
     if reason:
-        lines.append(f"เหตุผลย่อ: {reason}")
+        lines.append(f"📝 เหตุผล: {reason}")
 
     if targets:
-        if direction == "UP":
-            lines.append("🎯 TP: " + " / ".join(f"{t:,.2f}" for t in targets))
-        elif direction == "DOWN":
-            lines.append("🎯 TP: " + " / ".join(f"{t:,.2f}" for t in targets))
+        lines.append("🎯 Targets:")
+        for i, t in enumerate(targets, 1):
+            lines.append(f"  TP{i}: {t:,.2f}")
     if stop:
-        lines.append(f"🛑 SL: {stop:,.2f}")
+        lines.append(f"🛑 Stop Loss: {stop:,.2f}")
 
     if atr_pct is not None:
-        lines.append(f"ATR≈{atr_pct*100:.2f}%")
+        lines.append(f"📏 ATR≈{atr_pct*100:.2f}%")
     if watch_dn and watch_up:
-        lines.append(f"🔭 Watch: {watch_dn:,.2f} ↔ {watch_up:,.2f}")
+        lines.append(f"🔭 Watch zone: {watch_dn:,.2f} ↔ {watch_up:,.2f}")
 
-    lines.append("※ ไม่ใช่คำแนะนำการลงทุน ใช้วิจารณญาณและกำหนดขนาดความเสี่ยงให้เหมาะสม")
+    lines.append("")
+    lines.append("※ ไม่ใช่คำแนะนำการลงทุน")
+
     return "\n".join(lines)
 
 
@@ -160,7 +185,7 @@ def main():
     parser = argparse.ArgumentParser(description="Generate trade signal and optionally push to LINE.")
     parser.add_argument("--symbol", default="BTCUSDT")
     parser.add_argument("--tf", default="1D")
-    parser.add_argument("--profile", default="baseline")
+    parser.add_argument("--profile", default="baseline")  # เผื่อใช้ภายหลัง แม้ตอนนี้ยังไม่ส่งเข้า cfg
     parser.add_argument("--to", default="", help="LINE User ID (override LINE_USER_ID)")
     args = parser.parse_args()
 
@@ -178,7 +203,7 @@ def main():
     #    ผลลัพธ์คาดหวัง: dict ที่มี probs/best/targets/stop เป็นต้น
     result = analyze_scenarios(df=df, symbol=args.symbol, tf=args.tf)
 
-    # 3) สร้างสรุปข้อความ
+    # 3) สร้างสรุปข้อความ (สวย/อ่านง่าย)
     text = _format_line_message(
         symbol=args.symbol,
         tf=args.tf,
