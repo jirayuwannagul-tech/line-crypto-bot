@@ -88,7 +88,7 @@ class Rule:
     details: Dict[str, object]
 
 def _report(pattern: Pattern, rules: List[Rule], win: pd.DataFrame) -> Dict[str, object]:
-    # ✅ เพิ่ม wave_label แบบง่าย ๆ ให้แต่ละ pattern
+    # ✅ wave_label = คำอธิบายคลื่นตามกฎ ไม่ใช่ logic
     wave_label = "UNKNOWN"
     if pattern == "IMPULSE":
         wave_label = "Wave 1-5"
@@ -103,7 +103,7 @@ def _report(pattern: Pattern, rules: List[Rule], win: pd.DataFrame) -> Dict[str,
 
     return {
         "pattern": pattern,
-        "wave_label": wave_label,   # ✅ field ใหม่
+        "wave_label": wave_label,   # ✅ แค่บอกประเภท ไม่คาดการณ์
         "rules": [{"name": r.name, "passed": r.passed, "details": r.details} for r in rules],
         "debug": {
             "swings": win.tail(12).to_dict("records"),
@@ -242,10 +242,9 @@ def analyze_elliott_rules(df: pd.DataFrame, *, pivot_left: int = 2, pivot_right:
         return res
     return {"pattern": "UNKNOWN", "wave_label": "UNKNOWN", "rules": [{"name": "no_pattern_rules_matched", "passed": False, "details": {}}], "debug": {"swings": sw.tail(12).to_dict("records")}}
 
-# ✅ เพิ่มฟังก์ชันสำหรับ backward compatibility + เติม keys ที่ test ต้องการ
+# ✅ backward compatibility
 def analyze_elliott(df: pd.DataFrame, **kwargs) -> Dict[str, object]:
     result = analyze_elliott_rules(df, **kwargs)
-    # เติม dummy fields ให้เทสไม่ล้ม
     if "completed" not in result:
         result["completed"] = False
     if "current" not in result:
