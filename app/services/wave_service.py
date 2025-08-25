@@ -5,13 +5,14 @@
 # -----------------------------------------------------------------------------
 from __future__ import annotations
 
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List
 import pandas as pd
 import math
 
 from app.analysis.timeframes import get_data
 # 🔧 ใช้ logic layer
 from app.logic.scenarios import analyze_scenarios
+from app.logic.elliott_logic import classify_elliott_with_kind
 
 __all__ = ["analyze_wave", "build_brief_message"]
 
@@ -29,6 +30,7 @@ def _neutral_payload(symbol: str, tf: str, err: Optional[Exception] = None) -> D
         "meta": {"error": str(err) if err else None},
     }
 
+
 def _merge_dict(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
     """Recursive merge b over a."""
     out = dict(a)
@@ -38,6 +40,13 @@ def _merge_dict(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
         else:
             out[k] = v
     return out
+
+
+def _fmt_num(v: Optional[float]) -> Optional[str]:
+    if isinstance(v, (int, float)) and not math.isnan(v):
+        return f"{v:,.2f}"
+    return None
+
 
 # -----------------------------------------------------------------------------
 # Public API
@@ -52,10 +61,11 @@ def analyze_wave(
     """
     End-to-end analysis:
       - Load OHLCV from Excel/ccxt
-      - Run scenarios analyzer
+      - Run scenarios analyzer (+ optional Weekly context)
       - Attach TP/SL rules
       - Return payload ready for delivery
     """
+    # 1) Load main TF data
     try:
         df: pd.DataFrame = get_data(symbol, tf, xlsx_path=xlsx_path)
     except (FileNotFoundError, ValueError) as e:
@@ -64,12 +74,27 @@ def analyze_wave(
     if df is None or df.empty:
         return _neutral_payload(symbol, tf)
 
+    # 2) Merge config (safe defaults)
     base_cfg: Dict[str, Any] = {"elliott": {"allow_diagonal": True}}
     merged_cfg: Dict[str, Any] = _merge_dict(base_cfg, cfg or {})
 
-    payload = analyze_scenarios(df, symbol=symbol, tf=tf, cfg=merged_cfg)
+    # 3) Weekly context (1W) — best effort
+    weekly_ctx: Optional[Dict[str, Any]] = None
+    try:
+        weekly_df: pd.DataFrame = get_data(symbol, "1W", xlsx_path=xlsx_path)
+        if weekly_df is not None and not weekly_df.empty:
+            weekly_ctx = classify_elliott_with_kind(weekly_df, timeframe="1W")
+    except Exception:
+        weekly_ctx = None  # fail-safe: continue without weekly
 
-    # Attach last price/time
+    # 4) Run scenarios (try with weekly_ctx then fallback)
+    try:
+        payload = analyze_scenarios(df, symbol=symbol, tf=tf, cfg=merged_cfg, weekly_ctx=weekly_ctx)
+    except TypeError:
+        # for older versions of analyze_scenarios without weekly_ctx param
+        payload = analyze_scenarios(df, symbol=symbol, tf=tf, cfg=merged_cfg)
+
+    # 5) Attach last price/time (surface for LINE text)
     last = df.iloc[-1]
     px = float(last.get("close", float("nan")))
     payload["last"] = {
@@ -80,10 +105,10 @@ def analyze_wave(
         "volume": float(last.get("volume", float("nan"))),
     }
 
-    # เพิ่ม TP/SL rule
+    # 6) Attach TP/SL rule (surface)
     tp_levels = [0.03, 0.05, 0.07]
     sl_level = 0.03
-    if not math.isnan(px):
+    if isinstance(px, (int, float)) and not math.isnan(px):
         payload["risk"] = {
             "entry": px,
             "tp": [px * (1 + t) for t in tp_levels],
@@ -92,8 +117,24 @@ def analyze_wave(
             "sl_pct": sl_level,
         }
 
+    # 7) Ensure meta fields
     payload["symbol"] = symbol
     payload["tf"] = tf
+
+    # 8) Optionally surface weekly bias into levels.elliott.current.weekly_bias
+    #    (Some scenario implementations may already include it; this just preserves if present)
+    try:
+        if weekly_ctx:
+            lv = payload.setdefault("levels", {})
+            ell = lv.setdefault("elliott", {})
+            cur = ell.setdefault("current", {})
+            if "weekly_bias" not in cur and isinstance(weekly_ctx, dict):
+                wb = (weekly_ctx.get("current") or {}).get("weekly_bias")
+                if wb:
+                    cur["weekly_bias"] = wb
+    except Exception:
+        pass
+
     return payload
 
 
@@ -105,7 +146,7 @@ def build_brief_message(payload: Dict[str, Any]) -> str:
     sym = payload.get("symbol", "")
     tf = payload.get("tf", "")
     pct = payload.get("percent", {}) or {}
-    up, down, side = pct.get("up","?"), pct.get("down","?"), pct.get("side","?")
+    up, down, side = pct.get("up", "?"), pct.get("down", "?"), pct.get("side", "?")
 
     levels = payload.get("levels", {}) or {}
     rh, rl = levels.get("recent_high"), levels.get("recent_low")
@@ -115,24 +156,41 @@ def build_brief_message(payload: Dict[str, Any]) -> str:
     px = last.get("close")
 
     risk = payload.get("risk", {}) or {}
-    tp_pct = risk.get("tp_pct", [0.03, 0.05, 0.07])
-    sl_pct = risk.get("sl_pct", 0.03)
+    tp_pct: List[float] = risk.get("tp_pct", [0.03, 0.05, 0.07])
+    sl_pct: float = risk.get("sl_pct", 0.03)
 
-    lines: list[str] = []
-    lines.append(f"{sym} ({tf})")
-    if isinstance(px,(int,float)) and not math.isnan(px):
-        lines.append(f"ราคา: {px:,.2f}")
+    # Optional weekly bias line
+    weekly_line = ""
+    try:
+        ell = levels.get("elliott") or {}
+        cur = ell.get("current") or {}
+        wb = cur.get("weekly_bias")
+        if isinstance(wb, str) and wb:
+            weekly_line = f" [{wb.upper()} 1W]"
+    except Exception:
+        pass
+
+    lines: List[str] = []
+    header = f"{sym} ({tf}){weekly_line}"
+    lines.append(header)
+
+    px_txt = _fmt_num(px)
+    if px_txt:
+        lines.append(f"ราคา: {px_txt}")
+
     lines.append(f"ความน่าจะเป็น — ขึ้น {up}% | ลง {down}% | ออกข้าง {side}%")
 
-    if isinstance(rh,(int,float)) and isinstance(rl,(int,float)) and not (math.isnan(rh) or math.isnan(rl)):
-        lines.append(f"กรอบล่าสุด: H {rh:,.2f} / L {rl:,.2f}")
-    if isinstance(ema50,(int,float)) and isinstance(ema200,(int,float)) and not (math.isnan(ema50) or math.isnan(ema200)):
-        lines.append(f"EMA50 {ema50:,.2f} / EMA200 {ema200:,.2f}")
+    rh_txt, rl_txt = _fmt_num(rh), _fmt_num(rl)
+    if rh_txt and rl_txt:
+        lines.append(f"กรอบล่าสุด: H {rh_txt} / L {rl_txt}")
 
-    # ✅ เพิ่ม TP/SL rule ในข้อความ
-    if isinstance(px,(int,float)) and not math.isnan(px):
-        tp_txt = " / ".join([f"{int(t*100)}%" for t in tp_pct])
-        lines.append(f"TP: {tp_txt} | SL: {int(sl_pct*100)}%")
+    ema50_txt, ema200_txt = _fmt_num(ema50), _fmt_num(ema200)
+    if ema50_txt and ema200_txt:
+        lines.append(f"EMA50 {ema50_txt} / EMA200 {ema200_txt}")
+
+    # ✅ เพิ่ม TP/SL rule ในข้อความ (ใช้ %)
+    tp_txt = " / ".join([f"{int(t * 100)}%" for t in tp_pct])
+    lines.append(f"TP: {tp_txt} | SL: {int(sl_pct * 100)}%")
 
     rationale = payload.get("rationale", []) or []
     if rationale:
@@ -141,3 +199,49 @@ def build_brief_message(payload: Dict[str, Any]) -> str:
             lines.append(f"• {r}")
 
     return "\n".join(lines)
+def test_analyze_wave_includes_weekly_bias_in_message(monkeypatch):
+    import pandas as pd
+    import numpy as np
+    import datetime as dt
+
+    # ---- SUT imports
+    from app.services import wave_service
+
+    # -- fake get_data: รองรับทั้ง 1D และ 1W
+    def _fake_get_data(symbol, tf, xlsx_path=None):
+        periods = 30 if tf == "1D" else 30  # พอให้ indicators ไม่ล้ม
+        idx = pd.date_range(end=dt.datetime(2025, 8, 25), periods=periods, freq="D" if tf == "1D" else "W")
+        df = pd.DataFrame({
+            "timestamp": idx,
+            "open":  np.linspace(100, 110, len(idx)),
+            "high":  np.linspace(101, 111, len(idx)),
+            "low":   np.linspace( 99, 109, len(idx)),
+            "close": np.linspace(100, 110, len(idx)),
+            "volume": np.linspace(1000, 2000, len(idx)),
+        })
+        return df
+
+    # -- fake weekly elliott classify: ใส่ weekly_bias = 'up'
+    def _fake_classify_weekly(df, timeframe="1W", weekly_det=None):
+        return {"pattern": "IMPULSE", "kind": "IMPULSE_PROGRESS", "current": {"direction": "up", "weekly_bias": "up"}}
+
+    # -- fake scenarios: คืน payload พื้นฐาน (เว้น levels ว่างไว้ เพื่อให้ wave_service เติม weekly_bias ลงไปเองได้)
+    def _fake_analyze_scenarios(df, symbol="BTCUSDT", tf="1D", cfg=None, weekly_ctx=None):
+        return {
+            "percent": {"up": 50, "down": 30, "side": 20},
+            "levels": {},
+            "rationale": ["fake"],
+            "meta": {"symbol": symbol, "tf": tf},
+        }
+
+    monkeypatch.setattr(wave_service, "get_data", _fake_get_data)
+    monkeypatch.setattr(wave_service, "classify_elliott_with_kind", _fake_classify_weekly)
+    monkeypatch.setattr(wave_service, "analyze_scenarios", _fake_analyze_scenarios)
+
+    payload = wave_service.analyze_wave("BTCUSDT", "1D")
+    msg = wave_service.build_brief_message(payload)
+
+    # บรรทัดหัวควรมี weekly bias
+    # ตัวอย่าง: "BTCUSDT (1D) [UP 1W]"
+    first_line = msg.splitlines()[0]
+    assert "[UP 1W]" in first_line
