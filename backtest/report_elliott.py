@@ -7,6 +7,7 @@
 # - Metric เสริม:
 #   1) Invalid Impulse Rate (% overlap ผิดกฎ)
 #   2) Valid Corrective Pattern Rate (ZigZag, Flat, Triangle)
+#   3) Accuracy by wave_label (ถ้ามี)
 # =============================================================================
 
 import sys
@@ -31,7 +32,7 @@ def generate_report(file_path="backtest/results_elliott.csv"):
     print(f"Correct Predictions: {correct}")
     print(f"Accuracy (trend vs next bar): {accuracy:.2f}%")
 
-    # ===== Accuracy แยกตาม pattern/kind =====
+    # ===== Accuracy แยกตาม trend_pred =====
     if "trend_pred" in df.columns:
         print("\n— Accuracy by trend_pred —")
         for k, g in df.groupby("trend_pred", dropna=False):
@@ -39,6 +40,18 @@ def generate_report(file_path="backtest/results_elliott.csv"):
             hit = int(g["hit"].sum())
             acc = (hit / n * 100) if n else 0.0
             print(f"{str(k):>15}: {acc:.2f}%  (n={n})")
+
+    # ===== Accuracy แยกตาม wave_label (ใหม่) =====
+    if "wave_label" in df.columns:
+        print("\n— Accuracy by wave_label —")
+        for k, g in df.groupby("wave_label", dropna=False):
+            n = len(g)
+            if "hit" in g.columns:
+                hit = int(g["hit"].sum())
+                acc = (hit / n * 100) if n else 0.0
+                print(f"{str(k):>25}: {acc:.2f}%  (n={n})")
+            else:
+                print(f"{str(k):>25}: - (no hit col)")
 
     # ===== Metric เสริม 1: Invalid Impulse Rate =====
     if "debug" in df.columns:

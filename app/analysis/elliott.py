@@ -88,8 +88,22 @@ class Rule:
     details: Dict[str, object]
 
 def _report(pattern: Pattern, rules: List[Rule], win: pd.DataFrame) -> Dict[str, object]:
+    # ✅ เพิ่ม wave_label แบบง่าย ๆ ให้แต่ละ pattern
+    wave_label = "UNKNOWN"
+    if pattern == "IMPULSE":
+        wave_label = "Wave 1-5"
+    elif pattern == "DIAGONAL":
+        wave_label = "Wave 1/5 (Diagonal)"
+    elif pattern == "ZIGZAG":
+        wave_label = "Wave A-B-C (Zigzag)"
+    elif pattern == "FLAT":
+        wave_label = "Wave A-B-C (Flat)"
+    elif pattern == "TRIANGLE":
+        wave_label = "Wave A-B-C-D-E"
+
     return {
         "pattern": pattern,
+        "wave_label": wave_label,   # ✅ field ใหม่
         "rules": [{"name": r.name, "passed": r.passed, "details": r.details} for r in rules],
         "debug": {
             "swings": win.tail(12).to_dict("records"),
@@ -217,16 +231,16 @@ def _check_triangle_rules(sw: pd.DataFrame) -> Optional[Dict[str, object]]:
 def analyze_elliott_rules(df: pd.DataFrame, *, pivot_left: int = 2, pivot_right: int = 2, max_swings: int = 30) -> Dict[str, object]:
     needed = {"high", "low", "close"}
     if not needed.issubset(df.columns):
-        return {"pattern": "UNKNOWN", "rules": [{"name": "missing_columns", "passed": False, "details": {"columns": list(df.columns)}}], "debug": {}}
+        return {"pattern": "UNKNOWN", "wave_label": "UNKNOWN", "rules": [{"name": "missing_columns", "passed": False, "details": {"columns": list(df.columns)}}], "debug": {}}
     sw = _build_swings(df, left=pivot_left, right=pivot_right)
     if len(sw) == 0:
-        return {"pattern": "UNKNOWN", "rules": [{"name": "no_swings", "passed": False, "details": {}}], "debug": {}}
+        return {"pattern": "UNKNOWN", "wave_label": "UNKNOWN", "rules": [{"name": "no_swings", "passed": False, "details": {}}], "debug": {}}
     if len(sw) > max_swings:
         sw = sw.tail(max_swings).reset_index(drop=True)
     res = _check_impulse_rules(sw) or _check_zigzag_rules(sw) or _check_flat_rules(sw) or _check_triangle_rules(sw)
     if res is not None:
         return res
-    return {"pattern": "UNKNOWN", "rules": [{"name": "no_pattern_rules_matched", "passed": False, "details": {}}], "debug": {"swings": sw.tail(12).to_dict("records")}}
+    return {"pattern": "UNKNOWN", "wave_label": "UNKNOWN", "rules": [{"name": "no_pattern_rules_matched", "passed": False, "details": {}}], "debug": {"swings": sw.tail(12).to_dict("records")}}
 
 # ✅ เพิ่มฟังก์ชันสำหรับ backward compatibility + เติม keys ที่ test ต้องการ
 def analyze_elliott(df: pd.DataFrame, **kwargs) -> Dict[str, object]:

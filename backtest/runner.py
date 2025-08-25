@@ -15,7 +15,7 @@ from tqdm import tqdm   # ✅ progress bar
 
 # ===== Layer 0: Path & Imports =====
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from app.analysis import dow
+from app.analysis import dow, elliott
 from app.logic import elliott_logic
 
 
@@ -60,7 +60,16 @@ def predict_elliott(sub_df: pd.DataFrame):
     วิเคราะห์รูปแบบด้วย Elliott Wave logic
     """
     res = elliott_logic.classify_elliott(sub_df)
-    return res.get("kind", "UNKNOWN")
+    kind = res.get("kind", "UNKNOWN")
+
+    # ✅ ดึง wave_label จาก analyzer (app/analysis/elliott.py)
+    try:
+        rule_res = elliott.analyze_elliott(sub_df)
+        wave_label = rule_res.get("wave_label", "UNKNOWN")
+    except Exception:
+        wave_label = "UNKNOWN"
+
+    return kind, wave_label
 
 
 # ===== Layer 3: Backtest Loop =====
@@ -88,9 +97,10 @@ def run_backtest(
 
         if mode == "dow":
             trend_pred = predict_dow(sub_df, **kwargs)
+            wave_label = None
         else:  # Elliott mode
             sub_df = sub_df.tail(600)   # ✅ จำกัดข้อมูลล่าสุด 600 แท่ง
-            trend_pred = predict_elliott(sub_df)
+            trend_pred, wave_label = predict_elliott(sub_df)
 
         if i + 1 < len(df):
             real_trend = "UP" if close.iloc[i + 1] > close.iloc[i] else "DOWN"
@@ -101,6 +111,7 @@ def run_backtest(
             "date": df.index[i],
             "close": float(close.iloc[i]),
             "trend_pred": trend_pred,
+            "wave_label": wave_label if wave_label is not None else "UNKNOWN",  # ✅ new col
             "real_trend": real_trend,
             "hit": 1 if trend_pred in ("UP", "DOWN") and trend_pred == real_trend else 0,
         })
