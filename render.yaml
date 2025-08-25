@@ -41,3 +41,24 @@ services:
         sync: false
       - key: LINE_CHANNEL_ACCESS_TOKEN
         sync: false
+
+  - type: cron
+    name: line-crypto-hourly-btc
+    env: python
+    plan: free
+    schedule: "0 * * * *"   # รันทุกชั่วโมง (UTC)
+    buildCommand: pip install -r requirements.txt
+    startCommand: PYTHONPATH=. python scripts/push_price_hourly.py
+    envVars:
+      - key: ENV
+        value: production
+      - key: QUOTE_ASSET
+        value: USDT
+      - key: PRICE_SYMBOL
+        value: BTCUSDT
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false
+      - key: LINE_DEFAULT_TO
+        sync: false
+      - key: BINANCE_HOST
+        value: https://api.binance.com
