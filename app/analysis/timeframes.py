@@ -1,4 +1,4 @@
-
+# app/analysis/timeframes.py
 from __future__ import annotations
 
 import os
@@ -203,17 +203,25 @@ def get_data(
         except Exception:
             return None
 
+    # ----- 1H / 4H / 1D -----
     if tf_u in ("1H", "4H", "1D"):
-        df = _try_excel(symbol, tf_u) or _try_csv(symbol, tf_u)
-        return df if df is not None else pd.DataFrame(columns=REQUIRED_COLUMNS)
+        df = _try_excel(symbol, tf_u)
+        if df is None or df.empty:
+            df = _try_csv(symbol, tf_u)
+        if df is None:
+            return pd.DataFrame(columns=REQUIRED_COLUMNS)
+        return df
 
-    # 1W
+    # ----- 1W -----
+    # ลองอ่านชีท 1W โดยตรง
     df_1w = _try_excel(symbol, "1W")
-    if df_1w is not None:
+    if df_1w is not None and not df_1w.empty:
         return df_1w
 
-    # resample from 1D (Excel or CSV)
-    df_1d = _try_excel(symbol, "1D") or _try_csv(symbol, "1D")
+    # ถ้าไม่มี ให้ resample จาก 1D (Excel หรือ CSV)
+    df_1d = _try_excel(symbol, "1D")
+    if df_1d is None or df_1d.empty:
+        df_1d = _try_csv(symbol, "1D")
     if df_1d is None or df_1d.empty:
         return pd.DataFrame(columns=REQUIRED_COLUMNS)
     return _resample_to_1w(df_1d)
