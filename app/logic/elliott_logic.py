@@ -84,29 +84,19 @@ def _atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
 # -------------------- Base classify resolver --------------------
 def _call_base_classify(df: pd.DataFrame) -> Dict[str, Any]:
     try:
-        base_fn = classify_elliott  # type: ignore[name-defined]
-    except NameError:
-        base_fn = None
-
-    if callable(base_fn):
-        try:
-            out = base_fn(df)  # type: ignore[misc]
-            if isinstance(out, dict):
-                return out
-        except Exception:
-            pass
-
-    try:
         from app.analysis import elliott as ew
         raw = None
         if hasattr(ew, "analyze_elliott"):
-            raw = ew.analyze_elliott(df, min_swing_pct=3.0, strict_impulse=True, allow_overlap=False)
+            raw = ew.analyze_elliott(df)
         elif hasattr(ew, "analyze_elliott_rules"):
-            raw = ew.analyze_elliott_rules(df, min_swing_pct=3.0, strict_impulse=True, allow_overlap=False)
+            raw = ew.analyze_elliott_rules(df)
+        else:
+            return {"pattern": "UNKNOWN", "wave_label": "UNKNOWN", "completed": False}
 
         if isinstance(raw, dict):
             return {
-                "pattern": raw.get("pattern", raw.get("label", "UNKNOWN")),
+                "pattern": raw.get("pattern", "UNKNOWN"),
+                "wave_label": raw.get("wave_label", "UNKNOWN"),  # ✅ ใช้ field ใหม่
                 "completed": bool(raw.get("completed", False)),
                 "current": raw.get("current", {}) or {},
                 "rules": raw.get("rules", []),
@@ -115,7 +105,14 @@ def _call_base_classify(df: pd.DataFrame) -> Dict[str, Any]:
     except Exception:
         pass
 
-    return {"pattern": "UNKNOWN", "completed": False, "current": {}, "rules": [], "debug": {}}
+    return {
+        "pattern": "UNKNOWN",
+        "wave_label": "UNKNOWN",
+        "completed": False,
+        "current": {},
+        "rules": [],
+        "debug": {},
+    }
 
 # -------------------- Context enrichment --------------------
 def enrich_context(df_ctx: pd.DataFrame, det: Dict[str, Any]) -> Dict[str, Any]:
@@ -183,6 +180,7 @@ def enrich_context(df_ctx: pd.DataFrame, det: Dict[str, Any]) -> Dict[str, Any]:
 # -------------------- Mapping to "kind" --------------------
 def map_kind(det: Dict[str, Any]) -> str:
     patt = str(det.get("pattern", "")).upper()
+    wave_label = str(det.get("wave_label", "UNKNOWN")).upper()
     cur  = det.get("current", {}) or {}
 
     stage       = str(cur.get("stage", "")).upper()
@@ -194,6 +192,15 @@ def map_kind(det: Dict[str, Any]) -> str:
     atr_pct     = float(cur.get("atr_pct", 0.0))
     swing_fail  = bool(cur.get("swing_fail", False))
 
+    # ✅ ใช้ wave_label ในการช่วย map
+    if "WAVE 1-5" in wave_label:
+        if completed or swing_fail:
+            return "IMPULSE_TOP"
+        return "IMPULSE_PROGRESS"
+    if "WAVE A-B-C" in wave_label or patt in {"ZIGZAG", "FLAT", "TRIANGLE"}:
+        return "CORRECTION"
+
+    # ถ้า pattern ไม่ชัด → fallback logic เดิม
     if patt in {"UNKNOWN", "DIAGONAL"}:
         slope_abs = abs(ema_slope)
         if conf >= 0.55:
@@ -210,32 +217,10 @@ def map_kind(det: Dict[str, Any]) -> str:
             return "CORRECTION"
         return "UNKNOWN"
 
-    if "CORRECTION" in stage or "WXY" in stage or patt in {"DOUBLE_THREE", "ZIGZAG", "FLAT", "TRIANGLE", "CORRECTION"}:
-        return "CORRECTION"
-
-    if "IMPULSE" in patt or "IMPULSE" in stage or "W5" in stage:
-        if completed or "TOP" in stage:
-            return "IMPULSE_TOP"
-        if swing_fail or (ema_slope <= 0 and recent_dir == "down"):
-            return "IMPULSE_TOP"
-        if ema_slope > 0 and recent_dir == "up" and conf >= 0.50:
-            return "IMPULSE_PROGRESS"
-        if ema_slope > -2e-4 and atr_pct >= 0.004:
-            return "IMPULSE_PROGRESS"
-        return "IMPULSE_TOP"
-
-    if atr_pct < 0.005 and abs(ema_slope) < 5e-4:
-        return "CORRECTION"
-
     return "UNKNOWN"
 
 # -------------------- Multi-timeframe blending --------------------
 def blend_with_weekly_context(det_daily: Dict[str, Any], det_weekly: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    Blend context จาก Weekly → Daily
-    - ถ้า weekly = Impulse → เพิ่ม weight ฝั่ง UP
-    - ถ้า weekly = Correction → เพิ่ม weight ฝั่ง DOWN/SIDE
-    """
     if not det_weekly or not isinstance(det_weekly, dict):
         return det_daily
 
@@ -257,7 +242,7 @@ def blend_with_weekly_context(det_daily: Dict[str, Any], det_weekly: Optional[Di
 def classify_elliott_with_kind(df: pd.DataFrame, *, timeframe: str = "1D", degree: str = "intermediate", weekly_det: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     out = _call_base_classify(df)
     if not isinstance(out, dict):
-        out = {"pattern": "UNKNOWN", "completed": False, "current": {}}
+        out = {"pattern": "UNKNOWN", "wave_label": "UNKNOWN", "completed": False, "current": {}}
 
     out = enrich_context(df, out)
     kind = map_kind(out)
