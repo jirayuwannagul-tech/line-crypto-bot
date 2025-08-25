@@ -122,7 +122,6 @@ def analyze_wave(
     payload["tf"] = tf
 
     # 8) Optionally surface weekly bias into levels.elliott.current.weekly_bias
-    #    (Some scenario implementations may already include it; this just preserves if present)
     try:
         if weekly_ctx:
             lv = payload.setdefault("levels", {})
@@ -199,81 +198,3 @@ def build_brief_message(payload: Dict[str, Any]) -> str:
             lines.append(f"• {r}")
 
     return "\n".join(lines)
-def test_analyze_wave_includes_weekly_bias_in_message(monkeypatch):
-    import pandas as pd
-    import numpy as np
-    import datetime as dt
-
-    # ---- SUT imports
-    from app.services import wave_service
-
-    # -- fake get_data: รองรับทั้ง 1D และ 1W
-    def _fake_get_data(symbol, tf, xlsx_path=None):
-        periods = 30 if tf == "1D" else 30  # พอให้ indicators ไม่ล้ม
-        idx = pd.date_range(end=dt.datetime(2025, 8, 25), periods=periods, freq="D" if tf == "1D" else "W")
-        df = pd.DataFrame({
-            "timestamp": idx,
-            "open":  np.linspace(100, 110, len(idx)),
-            "high":  np.linspace(101, 111, len(idx)),
-            "low":   np.linspace( 99, 109, len(idx)),
-            "close": np.linspace(100, 110, len(idx)),
-            "volume": np.linspace(1000, 2000, len(idx)),
-        })
-        return df
-
-    # -- fake weekly elliott classify: ใส่ weekly_bias = 'up'
-    def _fake_classify_weekly(df, timeframe="1W", weekly_det=None):
-        return {"pattern": "IMPULSE", "kind": "IMPULSE_PROGRESS", "current": {"direction": "up", "weekly_bias": "up"}}
-
-    # -- fake scenarios: คืน payload พื้นฐาน (เว้น levels ว่างไว้ เพื่อให้ wave_service เติม weekly_bias ลงไปเองได้)
-    def _fake_analyze_scenarios(df, symbol="BTCUSDT", tf="1D", cfg=None, weekly_ctx=None):
-        return {
-            "percent": {"up": 50, "down": 30, "side": 20},
-            "levels": {},
-            "rationale": ["fake"],
-            "meta": {"symbol": symbol, "tf": tf},
-        }
-
-    monkeypatch.setattr(wave_service, "get_data", _fake_get_data)
-    monkeypatch.setattr(wave_service, "classify_elliott_with_kind", _fake_classify_weekly)
-    monkeypatch.setattr(wave_service, "analyze_scenarios", _fake_analyze_scenarios)
-
-    payload = wave_service.analyze_wave("BTCUSDT", "1D")
-    msg = wave_service.build_brief_message(payload)
-
-    # บรรทัดหัวควรมี weekly bias
-    # ตัวอย่าง: "BTCUSDT (1D) [UP 1W]"
-    first_line = msg.splitlines()[0]
-    assert "[UP 1W]" in first_line
-def test_analyze_wave_includes_weekly_bias_in_message(monkeypatch):
-    import pandas as pd, numpy as np, datetime as dt
-    from app.services import wave_service
-
-    # fake get_data: สร้าง df สำหรับทั้ง 1D และ 1W
-    def _fake_get_data(symbol, tf, xlsx_path=None):
-        n = 30
-        idx = pd.date_range(end=dt.datetime(2025,8,25), periods=n, freq='D' if tf=='1D' else 'W')
-        return pd.DataFrame({
-            'timestamp': idx,
-            'open':  np.linspace(100,110,n),
-            'high':  np.linspace(101,111,n),
-            'low':   np.linspace( 99,109,n),
-            'close': np.linspace(100,110,n),
-            'volume':np.linspace(1000,2000,n),
-        })
-
-    # fake weekly classify: ใส่ weekly_bias='up'
-    def _fake_classify_weekly(df, timeframe='1W', weekly_det=None):
-        return {'pattern':'IMPULSE','kind':'IMPULSE_PROGRESS','current':{'direction':'up','weekly_bias':'up'}}
-
-    # fake scenarios: ให้ payload พื้นฐาน
-    def _fake_analyze_scenarios(df, symbol='BTCUSDT', tf='1D', cfg=None, weekly_ctx=None):
-        return {'percent':{'up':50,'down':30,'side':20}, 'levels':{}, 'rationale':['fake'], 'meta':{'symbol':symbol,'tf':tf}}
-
-    monkeypatch.setattr(wave_service, 'get_data', _fake_get_data)
-    monkeypatch.setattr(wave_service, 'classify_elliott_with_kind', _fake_classify_weekly)
-    monkeypatch.setattr(wave_service, 'analyze_scenarios', _fake_analyze_scenarios)
-
-    payload = wave_service.analyze_wave('BTCUSDT','1D')
-    msg = wave_service.build_brief_message(payload)
-    assert '[UP 1W]' in msg.splitlines()[0]

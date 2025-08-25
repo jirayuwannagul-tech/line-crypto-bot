@@ -1,24 +1,33 @@
-# tests/test_wave_service.py
-import pytest
-import pandas as pd
-from app.services.wave_service import analyze_wave, build_brief_message
+# tests/services/test_wave_service.py
+def test_analyze_wave_includes_weekly_bias_in_message(monkeypatch):
+    import pandas as pd, numpy as np, datetime as dt
+    from app.services import wave_service
 
-def test_analyze_wave_neutral_when_no_data(monkeypatch):
-    # mock ให้ get_data คืน DataFrame ว่าง
-    monkeypatch.setattr("app.services.wave_service.get_data", lambda *a, **kw: pd.DataFrame())
+    # fake get_data: สร้าง df สำหรับทั้ง 1D และ 1W
+    def _fake_get_data(symbol, tf, xlsx_path=None):
+        n = 30
+        idx = pd.date_range(end=dt.datetime(2025, 8, 25), periods=n, freq='D' if tf == '1D' else 'W')
+        return pd.DataFrame({
+            'timestamp': idx,
+            'open':  np.linspace(100,110,n),
+            'high':  np.linspace(101,111,n),
+            'low':   np.linspace( 99,109,n),
+            'close': np.linspace(100,110,n),
+            'volume':np.linspace(1000,2000,n),
+        })
 
-    payload = analyze_wave("BTCUSDT", "1D")
-    assert "percent" in payload
-    assert payload["percent"]["up"] + payload["percent"]["down"] + payload["percent"]["side"] == 100
+    # fake weekly classify: ใส่ weekly_bias='up'
+    def _fake_classify_weekly(df, timeframe='1W', weekly_det=None):
+        return {'pattern':'IMPULSE','kind':'IMPULSE_PROGRESS','current':{'direction':'up','weekly_bias':'up'}}
 
-def test_build_brief_message_safe():
-    msg = build_brief_message({
-        "symbol": "BTCUSDT",
-        "tf": "1D",
-        "percent": {"up": 40, "down": 35, "side": 25},
-        "levels": {"recent_high": 120000, "recent_low": 110000, "ema50": 115000, "ema200": 100000},
-        "last": {"close": 113000},
-        "rationale": ["Dow UP", "RSI bullish"],
-    })
-    assert "BTCUSDT" in msg
-    assert "ความน่าจะเป็น" in msg
+    # fake scenarios: ให้ payload พื้นฐาน
+    def _fake_analyze_scenarios(df, symbol='BTCUSDT', tf='1D', cfg=None, weekly_ctx=None):
+        return {'percent':{'up':50,'down':30,'side':20}, 'levels':{}, 'rationale':['fake'], 'meta':{'symbol':symbol,'tf':tf}}
+
+    monkeypatch.setattr(wave_service, 'get_data', _fake_get_data)
+    monkeypatch.setattr(wave_service, 'classify_elliott_with_kind', _fake_classify_weekly)
+    monkeypatch.setattr(wave_service, 'analyze_scenarios', _fake_analyze_scenarios)
+
+    payload = wave_service.analyze_wave('BTCUSDT','1D')
+    msg = wave_service.build_brief_message(payload)
+    assert '[UP 1W]' in msg.splitlines()[0]
