@@ -169,7 +169,17 @@ def main():
         out_csv=args.out,
     )
 
-    # สรุปผล
+    
+    
+    # ถ้าไม่มีข้อมูล ให้จบแบบสุภาพ
+    if df is None or df.empty:
+        print("⚠️ ไม่มีข้อมูลจาก get_data() กรุณาตรวจแหล่งข้อมูล/ไฟล์ CSV/Excel")
+        return
+# ถ้าไม่มีข้อมูล ให้จบแบบสุภาพ
+    if df is None or df.empty:
+        print("⚠️ ไม่มีข้อมูลจาก get_data() กรุณาตรวจแหล่งข้อมูล/ไฟล์ CSV/Excel")
+        return
+# สรุปผล
     counts = df["outcome"].value_counts(dropna=False).to_dict()
     total = len(df)
     wins = int((df["outcome"] == "TP").sum())
