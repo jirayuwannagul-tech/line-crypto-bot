@@ -1,204 +1,209 @@
 #!/usr/bin/env python3
 """
-Trade Signal Generator
-รวมผล Elliott + ราคาจริง Binance + Probabilities จาก scenarios.py
-เลือกสัญญาณเดียวตาม % ที่มากที่สุด
+Trade Signal Generator → LINE Push
+รวมผล Elliott + ราคาจริง + Probabilities จาก scenarios.py
+เลือกสัญญาณความน่าจะเป็นสูงสุด แล้วส่งเข้า LINE (ถ้าเปิด SEND_TO_LINE=1)
 """
 
 from __future__ import annotations
 
+import os
+import sys
+import argparse
 import requests
-import pandas as pd
-import sys, os
 from typing import Dict, Optional, Tuple
 
-# import ฟังก์ชันจากโปรเจกต์
+import pandas as pd
+
+# === โปรเจกต์ของเรา ===
 from app.logic.scenarios import analyze_scenarios
 from app.analysis.timeframes import get_data
-from app.adapters.delivery_line import push_message  # ✅ ส่งเข้า LINE
 
+# ===============================
+# Config: TP/SL (fallback เผื่อ profile ไม่ได้กำหนด)
+# ===============================
 TP_PCTS = [0.03, 0.05, 0.07]
 SL_PCT = 0.03
+
 
 # ===============================
 # Utils: ATR% และ Watch Levels
 # ===============================
 def _atr_pct(df: pd.DataFrame, n: int = 14) -> Optional[float]:
     """
-    คำนวณ ATR เป็นสัดส่วนของราคา (เช่น 0.006 = 0.6%)
+    ATR% = ATR(n) / close ล่าสุด
     """
-    if df is None or len(df) < n + 1:
+    if len(df) < n + 1:
         return None
-    h, l, c = df["high"], df["low"], df["close"]
-    tr = pd.concat([(h - l).abs(), (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
-    atr = tr.ewm(alpha=1 / n, adjust=False).mean()
-    last_close = float(c.iloc[-1])
-    if last_close == 0:
-        return None
-    return float(atr.iloc[-1] / last_close)
+    highs = df["high"].to_numpy()
+    lows = df["low"].to_numpy()
+    closes = df["close"].to_numpy()
 
-def suggest_watch_levels(
-    *,
-    high: Optional[float],
-    low: Optional[float],
-    price: float,
-    atr_pct: Optional[float] = None,
-    pct_buffer: float = 0.0025,  # 0.25%
-    atr_mult: float = 0.25,      # 0.25 x ATR%
-) -> Optional[Tuple[float, float, float]]:
+    trs = []
+    for i in range(1, len(df)):
+        tr = max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
+        trs.append(tr)
+    atr = pd.Series(trs).rolling(n).mean().iloc[-1]
+    last_close = df["close"].iloc[-1]
+    return float(atr / last_close) if last_close else None
+
+
+def _watch_levels_from_atr(close: float, atr_pct: Optional[float], k: float = 1.5) -> Tuple[Optional[float], Optional[float]]:
     """
-    buffer_abs = max(pct_buffer * price, atr_mult * atr_pct * price)  (ถ้าไม่มี atr_pct ใช้ pct_buffer อย่างเดียว)
-    long_watch  = high + buffer_abs
-    short_watch = low  - buffer_abs
+    เลเวลเฝ้าดูแบบหยาบ ๆ จาก ATR% (±k*ATR%)
     """
-    if high is None or low is None:
-        return None
-    buf_pct_abs = pct_buffer * price
-    buf_atr_abs = (atr_mult * atr_pct * price) if (atr_pct is not None and atr_pct > 0) else 0.0
-    buffer_abs = max(buf_pct_abs, buf_atr_abs) if buf_atr_abs > 0 else buf_pct_abs
-    return (float(high) + buffer_abs, float(low) - buffer_abs, buffer_abs)
+    if atr_pct is None or close is None:
+        return None, None
+    return close * (1 - k * atr_pct), close * (1 + k * atr_pct)
+
 
 # ===============================
-# ดึงราคาจริง BTC จาก Binance
+# LINE Delivery (push message)
 # ===============================
-def get_btc_price() -> Dict[str, float]:
-    url = "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=1"
-    res = requests.get(url, timeout=10)
-    res.raise_for_status()
-    data = res.json()
-    if not data or (isinstance(data, dict) and "code" in data):
-        raise RuntimeError(f"Binance API error: {data}")
-    kline = data[0]
-    return {
-        "open": float(kline[1]),
-        "high": float(kline[2]),
-        "low": float(kline[3]),
-        "close": float(kline[4]),
-        "volume": float(kline[5]),
+def _can_send_line() -> bool:
+    return os.getenv("SEND_TO_LINE", "").strip() == "1"
+
+
+def _line_token() -> str:
+    tok = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
+    if not tok:
+        raise RuntimeError("ENV LINE_CHANNEL_ACCESS_TOKEN ไม่ถูกตั้งค่า")
+    return tok
+
+
+def _line_to_user() -> str:
+    to = os.getenv("LINE_USER_ID", "").strip()
+    if not to:
+        raise RuntimeError("ENV LINE_USER_ID ไม่ถูกตั้งค่า")
+    return to
+
+
+def _push_line_text(text: str, to_user: Optional[str] = None) -> None:
+    """
+    ส่งข้อความเข้า LINE ด้วย push API
+    """
+    url = "https://api.line.me/v2/bot/message/push"
+    headers = {
+        "Authorization": f"Bearer {_line_token()}",
+        "Content-Type": "application/json",
     }
+    body = {
+        "to": to_user or _line_to_user(),
+        "messages": [{"type": "text", "text": text}],
+    }
+    r = requests.post(url, headers=headers, json=body, timeout=10)
+    if r.status_code >= 300:
+        raise RuntimeError(f"LINE push error {r.status_code}: {r.text}")
+
 
 # ===============================
-# โหลด Elliott ล่าสุดจาก summary CSV
+# Message Builder
 # ===============================
-def load_latest_event(csv_path: str):
-    if not os.path.exists(csv_path):
-        return None
-    df = pd.read_csv(csv_path)
-    if df.empty:
-        return None
-    return df.iloc[-1]
+def _format_line_message(
+    symbol: str,
+    tf: str,
+    result: Dict,
+    last_close: float,
+    atr_pct: Optional[float],
+    watch_dn: Optional[float],
+    watch_up: Optional[float],
+) -> str:
+    """
+    result ควรมี: result["probs"] = {"UP": x, "DOWN": y, "SIDE": z}
+                  result["best"] = {"direction": "UP"/"DOWN"/"SIDE", "reason": "..."}
+                  result["targets"] (อาจมี), result["stop"] (อาจมี)
+    โค้ดนี้พยายามทนทาน ถ้า key บางอันไม่มีจะข้ามอย่างสุภาพ
+    """
+    probs = result.get("probs", {})
+    best = result.get("best", {}) or {}
+    direction = best.get("direction", "?")
+    reason = best.get("reason", "")
+    targets = result.get("targets", []) or []
+    stop = result.get("stop", None)
 
-# ===============================
-# สร้างแผนเทรด
-# ===============================
-def build_trade_plan(event, price_info) -> str:
-    close = price_info["close"]
-    high = price_info["high"]
-    low = price_info["low"]
+    # ถ้าไม่มี targets/stop ลอง fallback เป็น % มาตรฐาน
+    if not targets and last_close:
+        targets = [round(last_close * (1 + p), 2) if direction == "UP" else round(last_close * (1 - p), 2) for p in TP_PCTS]
+    if stop is None and last_close:
+        stop = round(last_close * (1 - SL_PCT), 2) if direction == "UP" else round(last_close * (1 + SL_PCT), 2)
 
-    # Elliott (ถ้าไม่มี event ให้ UNKNOWN)
-    elliott_pattern = event["new_pattern"] if event is not None and "new_pattern" in event else "UNKNOWN"
-    elliott_stage = event["new_stage"] if event is not None and "new_stage" in event else "UNKNOWN"
+    lines = []
+    lines.append(f"🧠 Signal • {symbol} • {tf}")
+    lines.append(f"ราคาล่าสุด: {last_close:,.2f}")
+    if probs:
+        lines.append(f"ความน่าจะเป็น % → ⬆️UP {probs.get('UP','-')} | ⬇️DOWN {probs.get('DOWN','-')} | ➡️SIDE {probs.get('SIDE','-')}")
+    lines.append(f"แผนหลัก: {direction}")
+    if reason:
+        lines.append(f"เหตุผลย่อ: {reason}")
 
-    # ===== ใช้ scenarios.py คำนวณ probs จริง =====
-    df = get_data("BTCUSDT", "1D")
-    probs = analyze_scenarios(df)
+    if targets:
+        if direction == "UP":
+            lines.append("🎯 TP: " + " / ".join(f"{t:,.2f}" for t in targets))
+        elif direction == "DOWN":
+            lines.append("🎯 TP: " + " / ".join(f"{t:,.2f}" for t in targets))
+    if stop:
+        lines.append(f"🛑 SL: {stop:,.2f}")
 
-    # ---- Normalize probs ----
-    probs_simple: Dict[str, float] = {}
-    if isinstance(probs, dict):
-        # รองรับทั้ง {"up": {"prob": 40}, ...} และ {"up": 40, ...}
-        for k, v in probs.items():
-            if isinstance(v, dict):
-                probs_simple[k] = v.get("prob", 0)
-            elif isinstance(v, (int, float)):
-                probs_simple[k] = v
-    elif isinstance(probs, list):
-        # รองรับ [{"dir":"up","prob":40}, ...]
-        for item in probs:
-            if isinstance(item, dict) and "dir" in item:
-                probs_simple[item["dir"]] = item.get("prob", 0)
+    if atr_pct is not None:
+        lines.append(f"ATR≈{atr_pct*100:.2f}%")
+    if watch_dn and watch_up:
+        lines.append(f"🔭 Watch: {watch_dn:,.2f} ↔ {watch_up:,.2f}")
 
-    if not probs_simple:
-        probs_simple = {"up": 0, "down": 0, "side": 0}
+    lines.append("※ ไม่ใช่คำแนะนำการลงทุน ใช้วิจารณญาณและกำหนดขนาดความเสี่ยงให้เหมาะสม")
+    return "\n".join(lines)
 
-    # Weekly bias mock (TODO: ต่อไปคำนวณจริง)
-    weekly_bias = "DOWN"
-
-    # Long/Short setup (เปอร์เซ็นต์)
-    long_tp = [round(close * (1 + p), 2) for p in TP_PCTS]
-    long_sl = round(close * (1 - SL_PCT), 2)
-    short_tp = [round(close * (1 - p), 2) for p in TP_PCTS]
-    short_sl = round(close * (1 + SL_PCT), 2)
-
-    # หาทางเลือกที่มี % สูงสุด
-    bias = max(probs_simple, key=probs_simple.get)
-
-    # ATR% เพื่อใช้ใน watch levels
-    atrp = _atr_pct(df, n=14)
-
-    # คำนวณ watch levels จากกรอบล่าสุด (H/L) + buffer
-    watch_lines = ""
-    wl = suggest_watch_levels(high=high, low=low, price=close, atr_pct=atrp, pct_buffer=0.0025, atr_mult=0.25)
-    if wl is not None:
-        long_watch, short_watch, buf_abs = wl
-        watch_lines = (
-            "\n🔎 Watch levels (รอสัญญาณ)"
-            f"\n• Long watch ≈ {long_watch:,.2f} (H + buffer)"
-            f"\n• Short watch ≈ {short_watch:,.2f} (L - buffer)"
-        )
-
-    text = f"""BTCUSDT (1D) [{weekly_bias} 1W]
-ราคา: {close:,.2f}
-Bias: {bias.upper()} ({probs_simple[bias]}%)
-กรอบล่าสุด: H {high:,.2f} / L {low:,.2f}
-เหตุผลย่อ:
-• Dow SIDE
-• Elliott {elliott_pattern} ({elliott_stage})
-• Weekly context: {weekly_bias} bias
-"""
-
-    if bias == "up":
-        text += f"""
-📈 Long Setup
-Entry: {close:,.2f}
-TP1 +3%: {long_tp[0]:,.2f} | TP2 +5%: {long_tp[1]:,.2f} | TP3 +7%: {long_tp[2]:,.2f}
-SL −3%: {long_sl:,.2f}
-"""
-    elif bias == "down":
-        text += f"""
-📉 Short Setup
-Entry: {close:,.2f}
-TP1 −3%: {short_tp[0]:,.2f} | TP2 −5%: {short_tp[1]:,.2f} | TP3 −7%: {short_tp[2]:,.2f}
-SL +3%: {short_sl:,.2f}
-"""
-    else:
-        text += "\n⚠️ ตลาด Sideway — ยังไม่แนะนำสัญญาณเข้า\n"
-
-    # ต่อท้าย watch levels (ถ้ามี)
-    if watch_lines:
-        text += f"{watch_lines}\n"
-
-    return text
 
 # ===============================
 # Main
 # ===============================
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python backtest/sim_trade_signal.py <events_summary.csv>")
+def main():
+    parser = argparse.ArgumentParser(description="Generate trade signal and optionally push to LINE.")
+    parser.add_argument("--symbol", default="BTCUSDT")
+    parser.add_argument("--tf", default="1D")
+    parser.add_argument("--profile", default="baseline")
+    parser.add_argument("--to", default="", help="LINE User ID (override LINE_USER_ID)")
+    args = parser.parse_args()
+
+    # 1) ดึงข้อมูลราคา
+    df = get_data(args.symbol, args.tf)
+    if df is None or df.empty:
+        print("ERROR: ไม่พบข้อมูลราคา")
         sys.exit(1)
 
-    events_csv = sys.argv[1]
-    event = load_latest_event(events_csv)
-    price_info = get_btc_price()
+    last_close = float(df["close"].iloc[-1])
+    atrp = _atr_pct(df, n=14)
+    wdn, wup = _watch_levels_from_atr(last_close, atrp, k=1.5)
 
-    plan = build_trade_plan(event, price_info)
-    print(plan)
+    # 2) วิเคราะห์ scenarios
+    #    ผลลัพธ์คาดหวัง: dict ที่มี probs/best/targets/stop เป็นต้น
+    result = analyze_scenarios(df=df, symbol=args.symbol, timeframe=args.tf, profile=args.profile)
 
-    # ✅ ส่งเข้า LINE โดยใช้ LINE_USER_ID จาก .env เป็นปลายทาง
-    try:
-        push_message(plan)
-        print("✅ ส่งเข้า LINE เรียบร้อย")
-    except Exception as e:
-        print(f"⚠️ ส่งเข้า LINE ไม่สำเร็จ: {e}")
+    # 3) สร้างสรุปข้อความ
+    text = _format_line_message(
+        symbol=args.symbol,
+        tf=args.tf,
+        result=result,
+        last_close=last_close,
+        atr_pct=atrp,
+        watch_dn=wdn,
+        watch_up=wup,
+    )
+
+    # 4) พิมพ์ในเทอร์มินัลเสมอ
+    print("\n" + "=" * 8 + " SIGNAL " + "=" * 8)
+    print(text)
+    print("=" * 24 + "\n")
+
+    # 5) ส่งเข้า LINE ถ้าเปิดใช้
+    if _can_send_line():
+        try:
+            to_user = args.to.strip() or None
+            _push_line_text(text, to_user=to_user)
+            print("✅ Pushed to LINE")
+        except Exception as e:
+            print(f"❌ LINE push failed: {e}")
+            sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()
