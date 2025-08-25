@@ -1,15 +1,9 @@
 # app/routers/line_webhook.py
 # =============================================================================
-# LAYER A) OVERVIEW (FastAPI Router for LINE Webhook)
+# LINE Webhook Router
 # -----------------------------------------------------------------------------
-# หน้าที่:
 # - รับ Webhook จาก LINE Messaging API
-# - แยกข้อความผู้ใช้ → สั่งวิเคราะห์ผ่าน engine → ตอบกลับ
-# - รองรับ:
-#   * คำสั่ง keyword (สวัสดี, mock, btc, ฯลฯ)
-#   * "ราคา BTC"
-#   * "analyze BTCUSDT 1D"
-#   * profile:xxx
+# - รองรับ keyword reply, ราคา BTC, analyze
 # =============================================================================
 
 from __future__ import annotations
@@ -20,17 +14,17 @@ import logging
 
 from fastapi import APIRouter, Request, HTTPException
 
-from app.engine.signal_engine import build_line_text, build_signal_payload
+from app.engine.signal_engine import build_line_text
 from app.adapters.delivery_line import LineDelivery
-from app.utils.crypto_price import fetch_price_text  # ✅ ใช้ utils ของเราแทน signal_service เก่า
-from app.features.replies.keyword_reply import get_reply  # ✅ เพิ่มการเชื่อมกับ keyword layer
+from app.utils.crypto_price import fetch_price_text
+from app.features.replies.keyword_reply import get_reply  # ✅ ใช้ keyword layer
 
 router = APIRouter()
 log = logging.getLogger(__name__)
 
 # =============================================================================
-# LAYER B) ENV & CLIENT
-# -----------------------------------------------------------------------------
+# ENV & CLIENT
+# =============================================================================
 def _get_env(name: str, default: Optional[str] = None) -> Optional[str]:
     v = os.getenv(name, default)
     return v if v not in (None, "") else default
@@ -48,8 +42,8 @@ def _client() -> LineDelivery:
     return _line_client
 
 # =============================================================================
-# LAYER C) COMMAND PARSER
-# -----------------------------------------------------------------------------
+# COMMAND PARSER
+# =============================================================================
 _SYM_RE = r"[A-Z0-9:\-/]{3,20}"
 
 def _parse_text(text: str) -> Dict[str, str]:
@@ -79,9 +73,9 @@ def _parse_text(text: str) -> Dict[str, str]:
     return {"symbol": symbol, "tf": tf, "profile": profile}
 
 # =============================================================================
-# LAYER D) WEBHOOK HANDLER
+# WEBHOOK HANDLER
 # =============================================================================
-@router.post("/line/webhook")
+@router.post("/webhook")   # ✅ ใช้ /webhook (prefix="/line" จะทำให้เป็น /line/webhook)
 async def line_webhook(request: Request) -> Dict[str, Any]:
     try:
         body = await request.json()
@@ -103,10 +97,10 @@ async def line_webhook(request: Request) -> Dict[str, Any]:
             user_text = msg.get("text", "").strip()
             reply_text = None
 
-            # 👉 (1) keyword replies เช่น สวัสดี, mock, btc
+            # (1) keyword replies เช่น สวัสดี, mock, btc
             reply_text = get_reply(user_text)
 
-            # 👉 (2) ราคา BTC
+            # (2) ราคา BTC
             if not reply_text and user_text.lower().startswith("ราคา"):
                 parts = user_text.split()
                 if len(parts) >= 2:
@@ -117,7 +111,7 @@ async def line_webhook(request: Request) -> Dict[str, Any]:
                     sym = "BTCUSDT"
                 reply_text = fetch_price_text(sym)
 
-            # 👉 (3) วิเคราะห์สัญญาณ
+            # (3) วิเคราะห์สัญญาณ
             if not reply_text:
                 args = _parse_text(user_text)
                 symbol, tf, profile = args["symbol"], args["tf"], args["profile"]
