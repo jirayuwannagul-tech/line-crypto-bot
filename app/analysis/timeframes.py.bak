@@ -1,4 +1,4 @@
-
+# app/analysis/timeframes.py
 from __future__ import annotations
 
 import os
@@ -16,27 +16,28 @@ __all__ = [
 
 # ---- Config ----
 DATA_PATH_DEFAULT = os.getenv("HISTORICAL_XLSX_PATH", "app/data/historical.xlsx")
+# ✅ รองรับ 1W
 SUPPORTED_TF: tuple[str, ...] = ("1H", "4H", "1D", "1W")
 REQUIRED_COLUMNS: Sequence[str] = ("timestamp", "open", "high", "low", "close", "volume")
 
 
 # ---- Errors ----
 class RequiredColumnsMissing(ValueError):
-    """Raised when required OHLCV columns are missing in Excel/CSV sheet."""
+    """Raised when required OHLCV columns are missing in Excel sheet."""
     pass
 
 
-# ---- Helpers (names) ----
+# ---- Helpers (Excel only, rules-only) ----
 def _sheet_name(symbol: str, tf: str) -> str:
     sym = symbol.upper().replace(":", "").replace("/", "")
     tf_norm = tf.upper()
     return f"{sym}_{tf_norm}"
 
+
 def _normalize(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]", "", name).lower()
 
 
-# ---- Excel helpers ----
 def _resolve_sheet_name(
     xlsx_path: str,
     symbol: str,
@@ -79,13 +80,15 @@ def _resolve_sheet_name(
         f"Available sheets: {xls.sheet_names}"
     )
 
-def _ensure_required_columns(df: pd.DataFrame, where: str) -> pd.DataFrame:
+
+def _ensure_required_columns(df: pd.DataFrame, sheet: str) -> pd.DataFrame:
     missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing:
         raise RequiredColumnsMissing(
-            f"{where} missing columns: {missing}. Expected: {list(REQUIRED_COLUMNS)}"
+            f"Sheet '{sheet}' missing columns: {missing}. Expected: {list(REQUIRED_COLUMNS)}"
         )
     return df.loc[:, list(REQUIRED_COLUMNS)]
+
 
 def _parse_and_clean_strict(df: pd.DataFrame) -> pd.DataFrame:
     ts = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
@@ -106,11 +109,13 @@ def _parse_and_clean_strict(df: pd.DataFrame) -> pd.DataFrame:
     df = df.drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
     return df
 
-def _validate_monotonic(df: pd.DataFrame, where: str) -> None:
+
+def _validate_monotonic(df: pd.DataFrame, sheet: str) -> None:
     if not df["timestamp"].is_monotonic_increasing:
-        raise ValueError(f"{where} timestamps are not strictly ascending.")
+        raise ValueError(f"Sheet '{sheet}' timestamps are not strictly ascending.")
     if (df["timestamp"].diff().dt.total_seconds().fillna(0) < 0).any():
-        raise ValueError(f"{where} contains backward time jumps.")
+        raise ValueError(f"Sheet '{sheet}' contains backward time jumps.")
+
 
 def _read_excel_strict(
     xlsx_path: str,
@@ -122,40 +127,24 @@ def _read_excel_strict(
         raise FileNotFoundError(f"Excel file not found: {xlsx_path}")
 
     sheet = _resolve_sheet_name(xlsx_path, symbol, tf, engine)
+
     raw = pd.read_excel(xlsx_path, sheet_name=sheet, engine=engine)
 
-    # map/validate
-    df = _ensure_required_columns(raw, f"Sheet '{sheet}' in {xlsx_path}")
+    df = _ensure_required_columns(raw, sheet)
     df = _parse_and_clean_strict(df)
-    _validate_monotonic(df, f"Sheet '{sheet}'")
+    _validate_monotonic(df, sheet)
+
     df = df.astype({
-        "open": "float64", "high": "float64",
-        "low": "float64", "close": "float64", "volume": "float64",
+        "open": "float64",
+        "high": "float64",
+        "low": "float64",
+        "close": "float64",
+        "volume": "float64",
     })
     return df.loc[:, list(REQUIRED_COLUMNS)]
 
 
-# ---- CSV helpers ----
-def _csv_path(symbol: str, tf: str) -> str:
-    return os.path.join("app", "data", f"{symbol.upper().replace(':','').replace('/','')}_{tf.upper()}.csv")
-
-def _read_csv_strict(symbol: str, tf: str) -> pd.DataFrame:
-    path = _csv_path(symbol, tf)
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"CSV not found: {path}")
-
-    raw = pd.read_csv(path)
-    raw.columns = [str(c).lower() for c in raw.columns]
-    if "timestamp" not in raw.columns and "date" in raw.columns:
-        raw = raw.rename(columns={"date": "timestamp"})
-
-    df = _ensure_required_columns(raw, f"CSV '{path}'")
-    df = _parse_and_clean_strict(df)
-    _validate_monotonic(df, f"CSV '{path}'")
-    return df.loc[:, list(REQUIRED_COLUMNS)]
-
-
-# ✅ Resample 1D -> 1W
+# ✅ NEW: resample 1D -> 1W (ถ้าไม่มีชีท 1W)
 def _resample_to_1w(df_1d: pd.DataFrame) -> pd.DataFrame:
     if df_1d is None or df_1d.empty:
         raise ValueError("cannot resample 1W: 1D dataframe is empty")
@@ -172,7 +161,7 @@ def _resample_to_1w(df_1d: pd.DataFrame) -> pd.DataFrame:
     return df.loc[:, ["timestamp", "open", "high", "low", "close", "volume"]]
 
 
-# ---- Main ----
+# ---- Main (Rules-Only) ----
 def get_data(
     symbol: str,
     tf: Literal["1H", "4H", "1D", "1W"],
@@ -181,39 +170,23 @@ def get_data(
     engine: str = "openpyxl",
 ) -> pd.DataFrame:
     """
-    Load OHLCV data from Excel; fallback to CSV in app/data when Excel sheet missing.
-    - ถ้า 1W ไม่มี → resample จาก 1D (Excel หรือ CSV)
+    Load OHLCV data from Excel ONLY (rules-only).
+    - ถ้า 1W ไม่มีใน Excel → จะ resample จาก 1D ให้อัตโนมัติ
+    - ไม่ fallback ไปที่แหล่งอื่น
     """
     tf_u = tf.upper()
     if tf_u not in SUPPORTED_TF:
         raise ValueError(f"Unsupported timeframe '{tf}'. Supported: {SUPPORTED_TF}")
 
-    # 1) ลอง Excel ก่อน
     path = xlsx_path or DATA_PATH_DEFAULT
 
-    def _try_excel(sym: str, tf_: str) -> pd.DataFrame | None:
-        try:
-            return _read_excel_strict(path, sym, tf_, engine=engine)
-        except Exception:
-            return None
-
-    def _try_csv(sym: str, tf_: str) -> pd.DataFrame | None:
-        try:
-            return _read_csv_strict(sym, tf_)
-        except Exception:
-            return None
-
+    # อ่านตรง ๆ สำหรับ 1H/4H/1D
     if tf_u in ("1H", "4H", "1D"):
-        df = _try_excel(symbol, tf_u) or _try_csv(symbol, tf_u)
-        return df if df is not None else pd.DataFrame(columns=REQUIRED_COLUMNS)
+        return _read_excel_strict(path, symbol, tf_u, engine=engine)
 
-    # 1W
-    df_1w = _try_excel(symbol, "1W")
-    if df_1w is not None:
-        return df_1w
-
-    # resample from 1D (Excel or CSV)
-    df_1d = _try_excel(symbol, "1D") or _try_csv(symbol, "1D")
-    if df_1d is None or df_1d.empty:
-        return pd.DataFrame(columns=REQUIRED_COLUMNS)
-    return _resample_to_1w(df_1d)
+    # 1W: ลองอ่านชีท 1W → ถ้าไม่เจอให้ resample จาก 1D
+    try:
+        return _read_excel_strict(path, symbol, "1W", engine=engine)
+    except Exception:
+        df_1d = _read_excel_strict(path, symbol, "1D", engine=engine)
+        return _resample_to_1w(df_1d)
