@@ -15,7 +15,7 @@ __all__ = [
     "get_data",
     "SUPPORTED_TF",
     "RequiredColumnsMissing",
-    # เพิ่มสำหรับ worker/health (ไม่บังคับใช้ ถ้าไม่เรียกก็ไม่กระทบส่วนอื่น)
+    # สำหรับ worker/health (เรียกใช้เมื่อจำเป็นเท่านั้น)
     "start_timeframe_service",
     "stop_timeframe_service",
     "get_last_updated",
@@ -26,20 +26,20 @@ DATA_PATH_DEFAULT = os.getenv("HISTORICAL_XLSX_PATH", "app/data/historical.xlsx"
 SUPPORTED_TF: tuple[str, ...] = ("1H", "4H", "1D", "1W")
 REQUIRED_COLUMNS: Sequence[str] = ("timestamp", "open", "high", "low", "close", "volume")
 
-# ========= CHANGE: Real-time fetch settings (ENV) =========
+# ========= Real-time fetch settings (ENV) =========
 REALTIME_ON = os.getenv("REALTIME", "").strip() == "1"
 REALTIME_PROVIDERS = [p.strip().lower() for p in os.getenv("PROVIDERS", "binance").split(",") if p.strip()]
-REALTIME_LIMIT = int(os.getenv("REALTIME_LIMIT", "1000"))  # per provider call (max 1000 for Binance)
-REALTIME_TIMEOUT = int(os.getenv("REALTIME_TIMEOUT", "12"))  # seconds
+REALTIME_LIMIT = int(os.getenv("REALTIME_LIMIT", "1000"))      # per API call (max 1000 for Binance)
+REALTIME_TIMEOUT = int(os.getenv("REALTIME_TIMEOUT", "12"))    # seconds
 
-# ---- Background updater config (optional ใช้เมื่อเรียก start_timeframe_service) ----
+# ---- Background updater config (ใช้เมื่อเรียก start_timeframe_service) ----
 _TIMEFRAME_SECONDS: Dict[str, int] = {
     "1H": 3600,
     "4H": 14400,
     "1D": 86400,
     "1W": 604800,
 }
-_BACKGROUND_WARM_LIMIT = int(os.getenv("BACKGROUND_WARM_LIMIT", "1000"))  # ดึงรอบแรก
+_BACKGROUND_WARM_LIMIT = int(os.getenv("BACKGROUND_WARM_LIMIT", "1000"))   # ดึงรอบแรก
 _BACKGROUND_CYCLE_LIMIT = int(os.getenv("BACKGROUND_CYCLE_LIMIT", "300"))  # รอบถัดไป
 
 # ---- Errors ----
@@ -194,7 +194,7 @@ def _resample_to_1w(df_1d: pd.DataFrame) -> pd.DataFrame:
     return df.loc[:, ["timestamp", "open", "high", "low", "close", "volume"]]
 
 
-# ========= CHANGE: Real-time provider chain (Binance first, pluggable) =========
+# ========= Real-time provider chain (Binance first, pluggable) =========
 def _tf_to_exchange_interval(tf: str) -> str:
     """Map '1H','4H','1D','1W' -> exchange interval string (Binance-compatible)."""
     t = (tf or "").strip().upper()
@@ -355,29 +355,53 @@ def get_last_updated(symbol: str, tf: str) -> Optional[float]:
     return _LAST_UPDATED.get((symbol.upper(), tf.upper()))
 
 def _seconds_until_next_bar(tf: str) -> int:
-    """รอให้ตรงขอบแท่ง: คำนวณเวลาถึงแท่งถัดไป (เผื่อ repaint)"""
+    """
+    รอให้ตรงขอบแท่ง: คำนวณเวลาถึงแท่งถัดไป (เผื่อ repaint)
+    รองรับโหมด debug ผ่าน ENV: FORCE_NEXTBAR_SECONDS (>0 จะใช้ค่านี้แทน)
+    """
+    try:
+        force = int(os.getenv("FORCE_NEXTBAR_SECONDS", "0") or "0")
+    except ValueError:
+        force = 0
+    if force > 0:
+        return max(1, force)
+
     now = int(time.time())
     step = _TIMEFRAME_SECONDS.get(tf.upper(), 3600)
-    # จับคู่กับรอบเวลาใหญ่ (1W/1D/4H/1H) แบบคร่าว ๆ
     next_cut = math.ceil(now / step) * step
     wait = max(1, next_cut - now)
-    # เผื่อ latency provider เล็กน้อย
-    return wait + 1
+    return wait + 1  # เผื่อ latency provider เล็กน้อย
 
 async def _update_once(symbol: str, tf: str, limit: int) -> None:
     """ดึงข้อมูลตามโหมด (realtime/file) แล้วเก็บลง cache"""
-    # พยายามโหมด realtime ก่อน (ถ้าเปิด)
     df: Optional[pd.DataFrame] = None
+
+    # โหมด realtime ก่อน (ถ้าเปิด)
     if REALTIME_ON:
         df = _fetch_from_providers(symbol, tf, limit)
+
     # ถ้าไม่ได้ ให้ fallback ไปอ่านไฟล์ (on-demand reader)
     if df is None or df.empty:
         try:
             df = get_data(symbol, tf)
         except Exception:
             df = None
+
     if df is not None and not df.empty:
         _cache_set(symbol, tf, df)
+
+def _update_blocking_wrapper(symbol: str, tf: str, limit: int) -> None:
+    """ตัวหุ้มสำหรับเรียกใน thread (เพราะ fetch บางส่วนเป็น sync)"""
+    try:
+        df: Optional[pd.DataFrame] = None
+        if REALTIME_ON:
+            df = _fetch_from_providers(symbol, tf, limit)
+        if df is None or df.empty:
+            df = get_data(symbol, tf)  # fallback file-based
+        if df is not None and not df.empty:
+            _cache_set(symbol, tf, df)
+    except Exception:
+        pass
 
 async def _run_stream(symbol: str, tf: str) -> None:
     """ลูป background: อุ่นข้อมูล → รอถึงขอบแท่ง → อัปเดตรอบถัดไป"""
@@ -394,24 +418,10 @@ async def _run_stream(symbol: str, tf: str) -> None:
             # กลืน error ไว้ใน loop เพื่อให้ลูปรอด
             await asyncio.sleep(2)
 
-def _update_blocking_wrapper(symbol: str, tf: str, limit: int) -> None:
-    """ตัวหุ้มให้ใช้ใน to_thread (เพราะ fetch ของเราบางส่วนเป็นแบบ sync)"""
-    try:
-        # realtime ก่อน ถ้าเปิด
-        df: Optional[pd.DataFrame] = None
-        if REALTIME_ON:
-            df = _fetch_from_providers(symbol, tf, limit)
-        if df is None or df.empty:
-            df = get_data(symbol, tf)  # fallback file-based
-        if df is not None and not df.empty:
-            _cache_set(symbol, tf, df)
-    except Exception:
-        pass
-
 async def start_timeframe_service(pairs: List[Tuple[str, str]]) -> None:
     """
     เริ่ม background updater สำหรับคู่เหรียญ/TF ที่กำหนด
-    - ไม่บังคับเปิด REALTIME ก็ได้ (จะอ่านไฟล์เป็นหลัก) แต่แนะนำเปิดซึ่งจะได้สดกว่า
+    - ไม่จำเป็นต้องเปิด REALTIME ก็ได้ (จะอ่านไฟล์เป็นหลัก) แต่เปิดไว้จะสดกว่า
     - ถ้าเรียกซ้ำและมี tasks อยู่แล้ว จะไม่สร้างซ้ำ
     """
     global _TASKS
