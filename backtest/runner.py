@@ -11,6 +11,7 @@
 
 import sys, os, argparse
 import pandas as pd
+from tqdm import tqdm   # ✅ progress bar
 
 # ===== Layer 0: Path & Imports =====
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
@@ -82,12 +83,13 @@ def run_backtest(
         raise RuntimeError("❌ ไม่เจอ column close")
 
     results = []
-    for i in range(50, len(df)):  # เริ่มหลัง warmup
+    for i in tqdm(range(50, len(df)), desc=f"Running {mode} backtest"):  # ✅ progress bar
         sub_df = df.iloc[:i].copy()
 
         if mode == "dow":
             trend_pred = predict_dow(sub_df, **kwargs)
         else:  # Elliott mode
+            sub_df = sub_df.tail(600)   # ✅ จำกัดข้อมูลล่าสุด 600 แท่ง
             trend_pred = predict_elliott(sub_df)
 
         if i + 1 < len(df):
@@ -108,7 +110,7 @@ def run_backtest(
     out_path = f"backtest/results_{mode}.csv"
     bt.to_csv(out_path, index=False, encoding="utf-8-sig")
 
-    print(f"✅ Backtest ({mode}) saved:", out_path)
+    print(f"\n✅ Backtest ({mode}) saved:", out_path)
     print(bt.tail(10))
 
 
