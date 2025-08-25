@@ -42,11 +42,12 @@ services:
       - key: LINE_CHANNEL_ACCESS_TOKEN
         sync: false
 
+  # ----- Cron 1: แจ้ง "ราคาเร็ว" ทุกชั่วโมง (UTC top of hour) -----
   - type: cron
-    name: line-crypto-hourly-btc
+    name: line-crypto-hourly-btc-price
     env: python
     plan: free
-    schedule: "0 * * * *"   # รันทุกชั่วโมง (UTC)
+    schedule: "0 * * * *"   # ทุกชั่วโมง นาทีที่ 00 (UTC)
     buildCommand: pip install -r requirements.txt
     startCommand: PYTHONPATH=. python scripts/push_price_hourly.py
     envVars:
@@ -56,9 +57,31 @@ services:
         value: USDT
       - key: PRICE_SYMBOL
         value: BTCUSDT
+      - key: JOB_BROADCAST
+        value: "1"           # broadcast ให้ทุกคน (ไม่ใช้ LINE_DEFAULT_TO)
       - key: LINE_CHANNEL_ACCESS_TOKEN
         sync: false
-      - key: LINE_DEFAULT_TO
+
+  # ----- Cron 2: แจ้ง "สรุปวิเคราะห์" ทุกชั่วโมง (โปรไฟล์ baseline, TF=1H) -----
+  - type: cron
+    name: line-crypto-hourly-btc-analysis
+    env: python
+    plan: free
+    schedule: "0 * * * *"   # ทุกชั่วโมง นาทีที่ 00 (UTC)
+    buildCommand: pip install -r requirements.txt
+    startCommand: PYTHONPATH=. python -m jobs.push_btc_hourly
+    envVars:
+      - key: ENV
+        value: production
+      - key: JOB_SYMBOL
+        value: BTCUSDT
+      - key: JOB_TF
+        value: 1H
+      - key: STRATEGY_PROFILE
+        value: baseline
+      - key: JOB_BROADCAST
+        value: "1"
+      - key: LINE_CHANNEL_ACCESS_TOKEN
         sync: false
-      - key: BINANCE_HOST
-        value: https://api.binance.com
+      - key: LINE_CHANNEL_SECRET
+        sync: false
