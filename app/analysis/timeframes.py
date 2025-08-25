@@ -16,7 +16,8 @@ __all__ = [
 
 # ---- Config ----
 DATA_PATH_DEFAULT = os.getenv("HISTORICAL_XLSX_PATH", "app/data/historical.xlsx")
-SUPPORTED_TF: tuple[str, ...] = ("1H", "4H", "1D")
+# ✅ เพิ่ม "1W" ให้รองรับ Weekly
+SUPPORTED_TF: tuple[str, ...] = ("1H", "4H", "1D", "1W")
 REQUIRED_COLUMNS: Sequence[str] = ("timestamp", "open", "high", "low", "close", "volume")
 
 
@@ -167,7 +168,7 @@ def _read_excel_strict(
 # ---- Main (Rules-Only) ----
 def get_data(
     symbol: str,
-    tf: Literal["1H", "4H", "1D"],
+    tf: Literal["1H", "4H", "1D", "1W"],  # ✅ รวม 1W
     *,
     xlsx_path: Optional[str] = None,
     engine: str = "openpyxl",
