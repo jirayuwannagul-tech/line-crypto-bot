@@ -194,18 +194,11 @@ def _elliott_guess_when_unknown(
     recent_high: Optional[float],
     leg_dir: Optional[str],
 ) -> str:
-    """
-    คาดเดาอย่างระมัดระวังเมื่อ pattern ยัง UNKNOWN
-    - ถ้าแนวโน้มขาลงเด่น (leg_dir == down) และราคาใกล้/ต่ำกว่า recent_low → เดา Wave 3 ลง
-    - ถ้าขึ้นเด่น (leg_dir == up) และราคาอยู่เหนือ EMA50 และถือ recent_low ได้ → เดา Wave C/3 ขึ้น
-    - ไม่เข้าเงื่อนไข → เดา Side/Triangle
-    """
     guess = "Side/Triangle (ยังไม่ชัด)"
     if not (close and ema50 and ema200):
         return guess
 
-    # safety thresholds
-    near_pct = 0.0045  # ~0.45% ใกล้แนวรับ-ต้าน
+    near_pct = 0.0045
     def _near(x: Optional[float]) -> bool:
         if x is None or x <= 0:
             return False
@@ -214,7 +207,6 @@ def _elliott_guess_when_unknown(
     if leg_dir == "down":
         if recent_low and (close < recent_low or _near(recent_low)):
             return "Wave 3 ลง (ถ้าหลุด Low ต่อเนื่อง)"
-        # ถ้าต่ำกว่า ema50/ema200 ก็ยัง bias ลง
         if close < ema50 and ema50 <= ema200:
             return "Wave 3 ลง (โครงสร้าง EMA เอียงลง)"
     elif leg_dir == "up":
@@ -234,7 +226,7 @@ def analyze_scenarios(
     symbol: str = "BTCUSDT",
     tf: str = "1D",
     cfg: Optional[Dict] = None,
-    weekly_ctx: Optional[Dict] = None,  # 🆕 บริบทจาก 1W
+    weekly_ctx: Optional[Dict] = None,
 ) -> Dict[str, object]:
     if df is None:
         raise ValueError("analyze_scenarios: df is None")
@@ -251,18 +243,15 @@ def analyze_scenarios(
     profile_name = str(cfg.get("profile", "baseline"))
     prof = _get_profile(tf, profile_name)
 
-    # Indicators
     df_ind = apply_indicators(df, cfg.get("ind_cfg"))
     last = df_ind.iloc[-1]
 
-    # Dow & Elliott
     dow = _analyze_dow_safe(df_ind)
     if classify_elliott_with_kind:
         ell = classify_elliott_with_kind(df_ind, timeframe=tf, weekly_det=weekly_ctx)
     else:
         ell = {"pattern": "UNKNOWN", "current": {"direction": "side"}}
 
-    # Swings + Fibo
     sw_meta = _recent_swings(df_ind, k=9)
     fibo_levels: Dict[str, Optional[float]] = {}
     cluster_info: Optional[Dict] = None
@@ -284,13 +273,11 @@ def analyze_scenarios(
             min_points=2,
         )
 
-    # Voting logic (คล้ายเดิม แต่รวม context 1W ถ้ามี)
     up_logit = down_logit = side_logit = 0.0
     notes: List[str] = []
     vw = prof["voting"]
     iw, dw, ew_w = float(vw["indicators_weight"]), float(vw["dow_weight"]), float(vw["elliott_weight"])
 
-    # Dow
     dp, dc = dow.get("trend_primary", "SIDE"), int(dow.get("confidence", 50))
     if dp == "UP":
         up_logit += 1.6 * dw
@@ -302,7 +289,6 @@ def analyze_scenarios(
         side_logit += 0.7 * dw
         notes.append("Dow SIDE")
 
-    # Elliott
     patt, edir, kind = (
         ell.get("pattern", "UNKNOWN"),
         (ell.get("current") or {}).get("direction", "side"),
@@ -319,11 +305,6 @@ def analyze_scenarios(
         side_logit += 0.5 * ew_w
         notes.append("Elliott Correction")
     else:
-        # ยัง UNKNOWN → ใส่ UNKNOWN ก่อน
-        side_logit += 0.4 * ew_w
-        notes.append(f"Elliott {patt}")
-
-        # 🆕 Elliott Guess (heuristic) — ไม่แตะไฟล์กฎ
         ema50 = float(last.get("ema50", np.nan))
         ema200 = float(last.get("ema200", np.nan))
         close = float(last.get("close", np.nan))
@@ -337,7 +318,6 @@ def analyze_scenarios(
         )
         notes.append(f"Elliott Guess: {guess}")
 
-        # ให้ logit ขยับเล็กน้อยตาม guess (น้ำหนักนุ่มๆ)
         if "ลง" in guess:
             down_logit += 0.25 * ew_w
         elif "ขึ้น" in guess:
@@ -345,7 +325,6 @@ def analyze_scenarios(
         else:
             side_logit += 0.15 * ew_w
 
-    # Weekly context blend 🆕
     wk_bias = (ell.get("current") or {}).get("weekly_bias", "neutral")
     if wk_bias == "up":
         up_logit += 0.8
@@ -354,7 +333,6 @@ def analyze_scenarios(
         down_logit += 0.8
         notes.append("Weekly context: DOWN bias")
 
-    # Indicators
     rsi = float(last.get("rsi14", np.nan))
     macd_hist = float(last.get("macd_hist", np.nan))
     ema50 = float(last.get("ema50", np.nan))
@@ -399,7 +377,6 @@ def analyze_scenarios(
             elif sw_meta.get("leg_dir") == "down":
                 down_logit += 0.3
 
-    # Convert logits → percentage
     pu, pd, ps = _softmax3(up_logit, down_logit, side_logit)
 
     levels = {
