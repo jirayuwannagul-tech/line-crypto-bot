@@ -196,7 +196,7 @@ def analyze_scenarios(
     if df is None:
         raise ValueError("analyze_scenarios: df is None")
 
-    if len(df) < 50:
+    if len(df) < 30:
         return {
             "percent": {"up": 33, "down": 33, "side": 34},
             "levels": {},
