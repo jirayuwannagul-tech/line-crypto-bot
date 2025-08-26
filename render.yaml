@@ -157,7 +157,6 @@ services:
   - type: cron
     name: line-crypto-hourly-btc-price
     env: python
-    plan: free
     schedule: "0 * * * *"
 
     buildCommand: |
@@ -181,7 +180,6 @@ services:
   - type: cron
     name: line-crypto-hourly-btc-analysis
     env: python
-    plan: free
     schedule: "0 * * * *"
 
     buildCommand: |
@@ -209,7 +207,6 @@ services:
   - type: cron
     name: line-crypto-hourly-news
     env: python
-    plan: free
     schedule: "5 * * * *"
 
     buildCommand: |
