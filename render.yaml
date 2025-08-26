@@ -24,65 +24,49 @@ services:
     healthCheckPath: /health
 
     envVars:
-      # ----- Runtime mode -----
       - key: ENV
         value: production
-
-      # ----- Price/Market (Adapters) -----
       - key: PRICE_PROVIDER
         value: binance
       - key: QUOTE_ASSET
         value: USDT
       - key: PRICE_TTL_SECONDS
         value: "15"
-
-      # ----- LINE (Delivery) -----
       - key: LINE_CHANNEL_SECRET
         sync: false
       - key: LINE_CHANNEL_ACCESS_TOKEN
         sync: false
-
-      # ----- News (Services → Sources) -----
-      # RSS หลัก (แก้/เพิ่มแหล่งได้เป็น comma-separated)
       - key: NEWS_RSS_URLS
         value: "https://www.federalreserve.gov/feeds/press_all.xml,https://www.coindesk.com/arc/outboundfeeds/rss/?outputType=xml,https://www.reuters.com/markets/cryptocurrency/rss"
-      # คีย์เวิร์ดดักข่าวที่เกี่ยวข้อง (กรองชั้น Service)
       - key: NEWS_KEYWORDS
         value: "bitcoin,btc,crypto,ethereum,sec,fed,interest rate,etf,halving,spot etf"
-      # เปิดใช้ NewsAPI (ออปชัน) → ต้องมีคีย์ด้านล่าง
       - key: NEWS_INCLUDE_NEWSAPI
         value: "false"
       - key: NEWSAPI_API_KEY
         sync: false
-      # จำนวนข่าว/รอบ และ TTL แคช
       - key: NEWS_MAX_ITEMS
         value: "20"
       - key: NEWS_TTL_SECONDS
         value: "300"
-
-      # ----- Translator (Services → Providers) -----
-      # เลือกผู้ให้บริการ: fallback | google | deepl | openai
       - key: TRANSLATOR_PROVIDER
         value: fallback
       - key: TRANSLATOR_CACHE_TTL
         value: "600"
       - key: TRANSLATOR_RATE_LIMIT_QPS
         value: "2"
-      # ใส่คีย์ตามผู้ให้บริการที่เลือก
       - key: GOOGLE_TRANSLATE_API_KEY
         sync: false
       - key: DEEPL_API_KEY
         sync: false
       - key: OPENAI_API_KEY
         sync: false
-      # (ออปชัน) ปรับโมเดล/เอนด์พอยต์ OpenAI
       - key: OPENAI_TRANSLATE_MODEL
         value: "gpt-4o-mini"
       - key: OPENAI_CHAT_COMPLETIONS_ENDPOINT
         value: "https://api.openai.com/v1/chat/completions"
 
   # ---------------------------------------------------------------------------
-  # WORKER LAYER — long-running background tasks, queues, internal schedulers
+  # WORKER LAYER — long-running background tasks
   # ---------------------------------------------------------------------------
   - type: worker
     name: line-crypto-worker
@@ -97,25 +81,18 @@ services:
       PYTHONPATH=. python worker.py
 
     envVars:
-      # ----- Runtime mode -----
       - key: ENV
         value: production
-
-      # ----- Price/Market (Adapters) -----
       - key: PRICE_PROVIDER
         value: binance
       - key: QUOTE_ASSET
         value: USDT
       - key: PRICE_TTL_SECONDS
         value: "15"
-
-      # ----- LINE (Delivery) -----
       - key: LINE_CHANNEL_SECRET
         sync: false
       - key: LINE_CHANNEL_ACCESS_TOKEN
         sync: false
-
-      # ----- News (Services → Sources) -----
       - key: NEWS_RSS_URLS
         value: "https://www.federalreserve.gov/feeds/press_all.xml,https://www.coindesk.com/arc/outboundfeeds/rss/?outputType=xml,https://www.reuters.com/markets/cryptocurrency/rss"
       - key: NEWS_KEYWORDS
@@ -128,8 +105,6 @@ services:
         value: "20"
       - key: NEWS_TTL_SECONDS
         value: "300"
-
-      # ----- Translator (Services → Providers) -----
       - key: TRANSLATOR_PROVIDER
         value: fallback
       - key: TRANSLATOR_CACHE_TTL
@@ -148,18 +123,42 @@ services:
         value: "https://api.openai.com/v1/chat/completions"
 
   # ---------------------------------------------------------------------------
-  # CRON LAYER — scheduled jobs (UTC)
-  #   1) Hourly fast price
-  #   2) Hourly analysis (baseline, TF=1H)
-  #   3) Hourly crypto news (pull → translate → LINE)
+  # WORKER LAYER — watch trade plans (TP/SL monitor)
   # ---------------------------------------------------------------------------
+  - type: worker
+    name: line-crypto-watch
+    env: python
+    plan: free
+    autoDeploy: true
 
-  # ----- Cron 1: แจ้ง "ราคาเร็ว" ทุกชั่วโมง (UTC top of hour) -----
+    buildCommand: |
+      pip install -r requirements.txt
+
+    startCommand: |
+      PYTHONPATH=. python -m jobs.watch_targets
+
+    envVars:
+      - key: ENV
+        value: production
+      - key: PRICE_PROVIDER
+        value: binance
+      - key: QUOTE_ASSET
+        value: USDT
+      - key: PRICE_TTL_SECONDS
+        value: "15"
+      - key: LINE_CHANNEL_SECRET
+        sync: false
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false
+
+  # ---------------------------------------------------------------------------
+  # CRON LAYER — scheduled jobs (UTC)
+  # ---------------------------------------------------------------------------
   - type: cron
     name: line-crypto-hourly-btc-price
     env: python
     plan: free
-    schedule: "0 * * * *"     # ทุกชั่วโมง นาทีที่ 00 (UTC)
+    schedule: "0 * * * *"
 
     buildCommand: |
       pip install -r requirements.txt
@@ -175,16 +174,15 @@ services:
       - key: PRICE_SYMBOL
         value: BTCUSDT
       - key: JOB_BROADCAST
-        value: "1"             # 1=broadcast, 0=push เฉพาะรายชื่อ
+        value: "1"
       - key: LINE_CHANNEL_ACCESS_TOKEN
         sync: false
 
-  # ----- Cron 2: แจ้ง "สรุปวิเคราะห์" ทุกชั่วโมง (โปรไฟล์ baseline, TF=1H) -----
   - type: cron
     name: line-crypto-hourly-btc-analysis
     env: python
     plan: free
-    schedule: "0 * * * *"     # ทุกชั่วโมง นาทีที่ 00 (UTC)
+    schedule: "0 * * * *"
 
     buildCommand: |
       pip install -r requirements.txt
@@ -208,12 +206,11 @@ services:
       - key: LINE_CHANNEL_SECRET
         sync: false
 
-  # ----- Cron 3: แจ้ง "ข่าวสำคัญ" ทุกชั่วโมง (ดึงข่าว → แปลไทย → ส่ง LINE) -----
   - type: cron
     name: line-crypto-hourly-news
     env: python
     plan: free
-    schedule: "5 * * * *"     # ทุกชั่วโมง นาทีที่ 05 (เผื่อราคา/วิเคราะห์เสร็จก่อน)
+    schedule: "5 * * * *"
 
     buildCommand: |
       pip install -r requirements.txt
@@ -224,48 +221,32 @@ services:
     envVars:
       - key: ENV
         value: production
-
-      # ----- LINE (Delivery) -----
       - key: LINE_CHANNEL_ACCESS_TOKEN
         sync: false
-
-      # ----- News push (Job Layer) -----
-      # เปิด/ปิด Job
       - key: NEWS_PUSH_ENABLED
         value: "true"
-      # จำกัดจำนวนข่าว/รอบ
       - key: NEWS_PUSH_LIMIT
         value: "3"
-      # กรองด้วยคีย์เวิร์ดซ้ำชั้นงาน (กันข่าวนอกประเด็น)
       - key: NEWS_PUSH_KEYWORDS
         value: "btc,bitcoin,crypto,ethereum,sec,fed,interest rate,etf,halving,spot etf"
-      # โหมดส่ง: 1=broadcast / 0=push เฉพาะรายชื่อ
       - key: NEWS_PUSH_BROADCAST
         value: "1"
-      # รายชื่อ USER IDs (ใช้เมื่อ BROADCAST=0)
       - key: NEWS_PUSH_USER_IDS
         value: ""
-      # ตั้งให้แปลไทยอัตโนมัติ
       - key: NEWS_TRANSLATE_TO_TH
         value: "true"
-      # ตัดความยาวข้อความ
       - key: NEWS_TITLE_MAX
         value: "120"
       - key: NEWS_SUMMARY_MAX
         value: "260"
-      # แสดงที่มาและเวลา
       - key: NEWS_APPEND_SOURCE
         value: "true"
       - key: NEWS_APPEND_TIME
         value: "true"
-      # เว้นบรรทัดระหว่างรายการข่าว
       - key: NEWS_NEWLINE_BETWEEN_ITEMS
         value: "2"
-      # ไฟล์กันส่งซ้ำ (บนดิสก์)
       - key: NEWS_SENT_DB
         value: "out/news_sent_ids.json"
-
-      # ----- News source/translator (reuse จาก WEB/WORKER) -----
       - key: NEWS_RSS_URLS
         value: "https://www.federalreserve.gov/feeds/press_all.xml,https://www.coindesk.com/arc/outboundfeeds/rss/?outputType=xml,https://www.reuters.com/markets/cryptocurrency/rss"
       - key: NEWS_KEYWORDS
@@ -278,7 +259,6 @@ services:
         value: "20"
       - key: NEWS_TTL_SECONDS
         value: "300"
-
       - key: TRANSLATOR_PROVIDER
         value: fallback
       - key: TRANSLATOR_CACHE_TTL
