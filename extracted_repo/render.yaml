@@ -1,0 +1,278 @@
+# =============================================================================
+# Infra Layer — Render services configuration
+# - Web API (FastAPI/uvicorn)
+# - Background Worker (queues/schedulers ถ้ามี)
+# - Cron Jobs (กำหนดเวลารัน: ราคา/วิเคราะห์/ข่าว)
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # WEB LAYER — FastAPI app (HTTP endpoints, LINE webhook, health check)
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: line-crypto-bot
+    env: python
+    plan: free
+    autoDeploy: true
+
+    buildCommand: |
+      pip install -r requirements.txt
+
+    startCommand: |
+      PYTHONPATH=. uvicorn app.main:app --host 0.0.0.0 --port $PORT
+
+    healthCheckPath: /health
+
+    envVars:
+      - key: ENV
+        value: production
+      - key: PRICE_PROVIDER
+        value: binance
+      - key: QUOTE_ASSET
+        value: USDT
+      - key: PRICE_TTL_SECONDS
+        value: "15"
+      - key: LINE_CHANNEL_SECRET
+        sync: false
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false
+      - key: NEWS_RSS_URLS
+        value: "https://www.federalreserve.gov/feeds/press_all.xml,https://www.coindesk.com/arc/outboundfeeds/rss/?outputType=xml,https://www.reuters.com/markets/cryptocurrency/rss"
+      - key: NEWS_KEYWORDS
+        value: "bitcoin,btc,crypto,ethereum,sec,fed,interest rate,etf,halving,spot etf"
+      - key: NEWS_INCLUDE_NEWSAPI
+        value: "false"
+      - key: NEWSAPI_API_KEY
+        sync: false
+      - key: NEWS_MAX_ITEMS
+        value: "20"
+      - key: NEWS_TTL_SECONDS
+        value: "300"
+      - key: TRANSLATOR_PROVIDER
+        value: fallback
+      - key: TRANSLATOR_CACHE_TTL
+        value: "600"
+      - key: TRANSLATOR_RATE_LIMIT_QPS
+        value: "2"
+      - key: GOOGLE_TRANSLATE_API_KEY
+        sync: false
+      - key: DEEPL_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_TRANSLATE_MODEL
+        value: "gpt-4o-mini"
+      - key: OPENAI_CHAT_COMPLETIONS_ENDPOINT
+        value: "https://api.openai.com/v1/chat/completions"
+
+  # ---------------------------------------------------------------------------
+  # WORKER LAYER — long-running background tasks
+  # ---------------------------------------------------------------------------
+  - type: worker
+    name: line-crypto-worker
+    env: python
+    plan: free
+    autoDeploy: true
+
+    buildCommand: |
+      pip install -r requirements.txt
+
+    startCommand: |
+      PYTHONPATH=. python worker.py
+
+    envVars:
+      - key: ENV
+        value: production
+      - key: PRICE_PROVIDER
+        value: binance
+      - key: QUOTE_ASSET
+        value: USDT
+      - key: PRICE_TTL_SECONDS
+        value: "15"
+      - key: LINE_CHANNEL_SECRET
+        sync: false
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false
+      - key: NEWS_RSS_URLS
+        value: "https://www.federalreserve.gov/feeds/press_all.xml,https://www.coindesk.com/arc/outboundfeeds/rss/?outputType=xml,https://www.reuters.com/markets/cryptocurrency/rss"
+      - key: NEWS_KEYWORDS
+        value: "bitcoin,btc,crypto,ethereum,sec,fed,interest rate,etf,halving,spot etf"
+      - key: NEWS_INCLUDE_NEWSAPI
+        value: "false"
+      - key: NEWSAPI_API_KEY
+        sync: false
+      - key: NEWS_MAX_ITEMS
+        value: "20"
+      - key: NEWS_TTL_SECONDS
+        value: "300"
+      - key: TRANSLATOR_PROVIDER
+        value: fallback
+      - key: TRANSLATOR_CACHE_TTL
+        value: "600"
+      - key: TRANSLATOR_RATE_LIMIT_QPS
+        value: "2"
+      - key: GOOGLE_TRANSLATE_API_KEY
+        sync: false
+      - key: DEEPL_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_TRANSLATE_MODEL
+        value: "gpt-4o-mini"
+      - key: OPENAI_CHAT_COMPLETIONS_ENDPOINT
+        value: "https://api.openai.com/v1/chat/completions"
+
+  # ---------------------------------------------------------------------------
+  # WORKER LAYER — watch trade plans (TP/SL monitor)
+  # ---------------------------------------------------------------------------
+  - type: worker
+    name: line-crypto-watch
+    env: python
+    plan: free
+    autoDeploy: true
+
+    buildCommand: |
+      pip install -r requirements.txt
+
+    startCommand: |
+      PYTHONPATH=. python -m jobs.watch_targets
+
+    envVars:
+      - key: ENV
+        value: production
+      - key: PRICE_PROVIDER
+        value: binance
+      - key: QUOTE_ASSET
+        value: USDT
+      - key: PRICE_TTL_SECONDS
+        value: "15"
+      - key: LINE_CHANNEL_SECRET
+        sync: false
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false
+
+  # ---------------------------------------------------------------------------
+  # CRON LAYER — scheduled jobs (UTC)
+  # ---------------------------------------------------------------------------
+  - type: cron
+    name: line-crypto-hourly-btc-price
+    env: python
+    schedule: "0 * * * *"
+
+    buildCommand: |
+      pip install -r requirements.txt
+
+    startCommand: |
+      PYTHONPATH=. python scripts/push_price_hourly.py
+
+    envVars:
+      - key: ENV
+        value: production
+      - key: QUOTE_ASSET
+        value: USDT
+      - key: PRICE_SYMBOL
+        value: BTCUSDT
+      - key: JOB_BROADCAST
+        value: "1"
+      - key: LINE_CHANNEL_SECRET
+        sync: false
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false
+
+  - type: cron
+    name: line-crypto-hourly-btc-analysis
+    env: python
+    schedule: "0 * * * *"
+
+    buildCommand: |
+      pip install -r requirements.txt
+
+    startCommand: |
+      PYTHONPATH=. python -m jobs.push_btc_hourly
+
+    envVars:
+      - key: ENV
+        value: production
+      - key: JOB_SYMBOL
+        value: BTCUSDT
+      - key: JOB_TF
+        value: 1H
+      - key: STRATEGY_PROFILE
+        value: baseline
+      - key: JOB_BROADCAST
+        value: "1"
+      - key: LINE_CHANNEL_SECRET
+        sync: false
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false
+
+  - type: cron
+    name: line-crypto-hourly-news
+    env: python
+    schedule: "5 * * * *"
+
+    buildCommand: |
+      pip install -r requirements.txt
+
+    startCommand: |
+      PYTHONPATH=. python jobs/push_news.py
+
+    envVars:
+      - key: ENV
+        value: production
+      - key: LINE_CHANNEL_SECRET
+        sync: false
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false
+      - key: NEWS_PUSH_ENABLED
+        value: "true"
+      - key: NEWS_PUSH_LIMIT
+        value: "3"
+      - key: NEWS_PUSH_KEYWORDS
+        value: "btc,bitcoin,crypto,ethereum,sec,fed,interest rate,etf,halving,spot etf"
+      - key: NEWS_PUSH_BROADCAST
+        value: "1"
+      - key: NEWS_PUSH_USER_IDS
+        value: ""
+      - key: NEWS_TRANSLATE_TO_TH
+        value: "true"
+      - key: NEWS_TITLE_MAX
+        value: "120"
+      - key: NEWS_SUMMARY_MAX
+        value: "260"
+      - key: NEWS_APPEND_SOURCE
+        value: "true"
+      - key: NEWS_APPEND_TIME
+        value: "true"
+      - key: NEWS_NEWLINE_BETWEEN_ITEMS
+        value: "2"
+      - key: NEWS_SENT_DB
+        value: "out/news_sent_ids.json"
+      - key: NEWS_RSS_URLS
+        value: "https://www.federalreserve.gov/feeds/press_all.xml,https://www.coindesk.com/arc/outboundfeeds/rss/?outputType=xml,https://www.reuters.com/markets/cryptocurrency/rss"
+      - key: NEWS_KEYWORDS
+        value: "bitcoin,btc,crypto,ethereum,sec,fed,interest rate,etf,halving,spot etf"
+      - key: NEWS_INCLUDE_NEWSAPI
+        value: "false"
+      - key: NEWSAPI_API_KEY
+        sync: false
+      - key: NEWS_MAX_ITEMS
+        value: "20"
+      - key: NEWS_TTL_SECONDS
+        value: "300"
+      - key: TRANSLATOR_PROVIDER
+        value: fallback
+      - key: TRANSLATOR_CACHE_TTL
+        value: "600"
+      - key: TRANSLATOR_RATE_LIMIT_QPS
+        value: "2"
+      - key: GOOGLE_TRANSLATE_API_KEY
+        sync: false
+      - key: DEEPL_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_TRANSLATE_MODEL
+        value: "gpt-4o-mini"
+      - key: OPENAI_CHAT_COMPLETIONS_ENDPOINT
+        value: "https://api.openai.com/v1/chat/completions"

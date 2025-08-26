@@ -1,0 +1,169 @@
+# app/config/strategy_profiles.yaml
+# =============================================================================
+# LAYER A) METADATA & DEFAULTS
+# =============================================================================
+meta:
+  version: 1
+  updated: "2025-08-22"
+  description: >
+    Strategy profiles for Elliott-driven decisioning. Profiles control voting
+    weights, confirmation rules (EMA/RSI), and target construction (Fibonacci).
+
+defaults:
+  min_prob: 0
+  min_rr: 1.20
+  use_pct_targets: false
+  sl_pct: 0.03
+  tp_pcts: [0.03, 0.07, 0.12]
+
+  confirm:
+    rsi_bull_min: 55
+    rsi_bear_max: 45
+    ema_structure_required: false
+    atr_min_pct: 0.004
+
+  fibo:
+    retr: [0.382, 0.5, 0.618]
+    ext:  [1.272, 1.618]
+    cluster_tolerance: 0.003
+
+  voting:
+    elliott_weight: 1.00
+    dow_weight: 0.80
+    indicators_weight: 0.60
+    side_range_threshold: 0.035
+
+  momentum_triggers:
+    rsi_bull_trigger: 57
+    rsi_bear_trigger: 43
+    macd_hist_bias_weight: 0.15
+
+# =============================================================================
+# LAYER B) PROFILES
+# =============================================================================
+profiles:
+
+  baseline:
+    min_prob: 50
+    min_rr: 1.30
+    use_pct_targets: false
+    sl_pct: 0.03
+    tp_pcts: [0.03, 0.07, 0.12]
+    confirm:
+      rsi_bull_min: 55
+      rsi_bear_max: 45
+      ema_structure_required: false
+      atr_min_pct: 0.004
+    fibo:
+      retr: [0.382, 0.5, 0.618]
+      ext:  [1.272, 1.618]
+      cluster_tolerance: 0.0035
+    voting:
+      elliott_weight: 1.10
+      dow_weight: 0.90
+      indicators_weight: 0.70
+      side_range_threshold: 0.035
+    momentum_triggers:
+      rsi_bull_trigger: 57
+      rsi_bear_trigger: 43
+      macd_hist_bias_weight: 0.15
+    overrides:
+      by_timeframe:
+        "1D": { min_rr: 1.40 }
+        "4H": { min_rr: 1.30 }
+        "1H": { min_rr: 1.20 }
+
+  cholak:   # ลุงโฉลก – เน้นภาพใหญ่/วัฏจักร
+    min_prob: 55
+    min_rr: 1.50
+    use_pct_targets: false
+    sl_pct: 0.03
+    tp_pcts: [0.03, 0.07, 0.12]
+    confirm:
+      rsi_bull_min: 56
+      rsi_bear_max: 44
+      ema_structure_required: true
+      atr_min_pct: 0.005
+    fibo:
+      retr: [0.382, 0.5, 0.618]
+      ext:  [1.272, 1.618]
+      cluster_tolerance: 0.003
+    voting:
+      elliott_weight: 1.40
+      dow_weight: 1.00
+      indicators_weight: 0.70
+      side_range_threshold: 0.030
+    momentum_triggers:
+      rsi_bull_trigger: 58
+      rsi_bear_trigger: 42
+      macd_hist_bias_weight: 0.12
+    overrides:
+      by_timeframe:
+        "1D": { min_rr: 1.60 }
+        "4H": { min_rr: 1.50 }
+        "1H": { min_rr: 1.40 }
+
+  chinchot: # ชินโชติ – เชิงรุก
+    min_prob: 45
+    min_rr: 1.00
+    use_pct_targets: true
+    sl_pct: 0.025
+    tp_pcts: [0.02, 0.05, 0.09]
+    confirm:
+      rsi_bull_min: 53
+      rsi_bear_max: 47
+      ema_structure_required: false
+      atr_min_pct: 0.0035
+    fibo:
+      retr: [0.382, 0.5, 0.618, 0.786]
+      ext:  [1.272, 1.618, 2.0]
+      cluster_tolerance: 0.0045
+    voting:
+      elliott_weight: 1.20
+      dow_weight: 0.80
+      indicators_weight: 0.90
+      side_range_threshold: 0.040
+    momentum_triggers:
+      rsi_bull_trigger: 56
+      rsi_bear_trigger: 44
+      macd_hist_bias_weight: 0.18
+    overrides:
+      by_timeframe:
+        "1D": { min_rr: 1.10 }
+        "4H": { min_rr: 1.00 }
+        "1H": { min_rr: 0.90 }
+
+  elliott_daily: # 🔥 โปรไฟล์ใหม่ – TF 1D + ใช้บริบทภาพใหญ่แบบลุงโฉลก
+    min_prob: 50
+    min_rr: 1.35
+    use_pct_targets: true
+    sl_pct: 0.03
+    tp_pcts: [0.03, 0.05, 0.07]   # ยึด TP/SL ตามสเปกโครงการ
+    confirm:
+      rsi_bull_min: 55
+      rsi_bear_max: 45
+      ema_structure_required: true
+      atr_min_pct: 0.004
+    fibo:
+      retr: [0.382, 0.5, 0.618]
+      ext:  [1.272, 1.618]
+      cluster_tolerance: 0.0035
+    voting:
+      elliott_weight: 1.20
+      dow_weight: 0.90
+      indicators_weight: 0.75
+      side_range_threshold: 0.032
+    momentum_triggers:
+      rsi_bull_trigger: 56
+      rsi_bear_trigger: 44
+      macd_hist_bias_weight: 0.15
+    overrides:
+      by_timeframe:
+        "1D": { min_rr: 1.35, use_weekly_context: true }
+
+# =============================================================================
+# LAYER C) NOTES
+# =============================================================================
+# - ใช้ profile "elliott_daily" สำหรับ TF 1D โดยจะ blend กับ context จาก 1W
+# - จุด TP/SL กำหนดเป็น %: TP 3/5/7% และ SL 3%
+# - สามารถเลือกโปรไฟล์ได้จาก config: profile_name = "elliott_daily"

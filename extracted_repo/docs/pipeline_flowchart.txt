@@ -1,0 +1,50 @@
+┌──────────────────────────────────────────────────────────┐
+│                        START                             │
+└───────────────┬──────────────────────────────────────────┘
+                │  get_data(symbol, tf)
+                v
+        ┌────────────────────────────────┐
+        │ ENV: REALTIME == "1" ?         │
+        │  (REALTIME_PROVIDERS=binance)  │
+        └───────────────┬────────────────┘
+                        │Yes
+                        v
+            ┌─────────────────────────────────────────────┐
+            │ _tf_to_exchange_interval(tf) → "1h/4h/1d/1w"│
+            │ _fetch_ohlcv_binance(symbol, interval, N)   │
+            └───────────────┬─────────────────────────────┘
+                            v
+                ┌───────────────────────────────────────┐
+                │ _postprocess_realtime_df(df)          │
+                │  - ตรวจคอลัมน์ REQUIRED_COLUMNS      │
+                │  - _parse_and_clean_strict            │
+                │  - _validate_monotonic                │
+                └───────────────┬───────────────────────┘
+                                │ df OK ? (ไม่ว่าง)
+                                │Yes
+                                v
+                        ┌───────────────────────┐
+                        │   DataFrame พร้อมใช้  │
+                        └───────────┬───────────┘
+                                    │
+                                    v
+                         ┌──────────────────────┐
+                         │ apply_indicators(df) │
+                         │  EMA/RSI/MACD/ADXฯ   │
+                         └───────────┬──────────┘
+                                     v
+                           ┌────────────────────┐
+                           │  OUTPUT DataFrame  │
+                           └────────────────────┘
+
+
+(กรณี REALTIME != "1")
+┌──────────────────────────────────────────────────────────┐
+│ File-based Flow                                          │
+│ 1) Excel (HISTORICAL_XLSX_PATH, sheet: SYMBOL_TF)        │
+│    - _ensure_required_columns                            │
+│    - _parse_and_clean_strict                             │
+│    - _validate_monotonic                                 │
+│ 2) ถ้า Excel ไม่มี → ลอง CSV (app/data/SYMBOL_TF.csv)    │
+│ 3) ถ้า tf=1W และไม่มีชีท 1W → resample จาก 1D           │
+└──────────────────────────────────────────────────────────┘
