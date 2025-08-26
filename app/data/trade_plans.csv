@@ -1,0 +1,2 @@
+timestamp,symbol,timeframe,direction,entry,tp1,tp2,tp3,sl,prob_up,prob_down,prob_side,ema50,ema200,high,low,reason,tp1_hit,tp2_hit,tp3_hit,sl_hit,closed_at
+2025-08-26T02:29:04.161590,BTCUSDT,1D,SHORT,111920,108201.56,105970.60,103739.64,114894.44,17,70,13,114755.97,103688.96,124474,111920,Dow SIDE; Elliott Unknown; Weekly DOWN bias,,,,,
