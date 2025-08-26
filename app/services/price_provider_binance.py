@@ -12,6 +12,9 @@ from __future__ import annotations
 import os
 from typing import Iterable, Optional
 import httpx
+import logging
+
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # CONFIG LAYER
@@ -50,7 +53,7 @@ class BinancePriceProvider:
         params = {"symbol": symbol.upper()}
         last_err: Optional[Exception] = None
 
-        for _ in range(self.retries):
+        for attempt in range(self.retries):
             for host in self.hosts:
                 url = f"{host}/api/v3/ticker/price"
                 try:
@@ -58,10 +61,18 @@ class BinancePriceProvider:
                         r = client.get(url, params=params)
                         r.raise_for_status()
                         data = r.json()
+                        # ตรวจสอบว่า key มีจริง
+                        if "price" not in data:
+                            raise ValueError(f"Unexpected response: {data}")
                         return float(data["price"])
                 except Exception as e:
+                    logger.warning(
+                        f"[BinancePriceProvider] attempt={attempt+1} host={host} "
+                        f"symbol={symbol} error={e}"
+                    )
                     last_err = e
                     continue
+
         raise RuntimeError(f"Cannot fetch price for {symbol}: {last_err}")
 
 
@@ -90,5 +101,8 @@ def get_price(symbol: str) -> float:
 # DEBUG / TEST
 # =============================================================================
 if __name__ == "__main__":
-    price = get_price("BTCUSDT")
-    print(f"BTCUSDT last price = {price}")
+    try:
+        price = get_price("BTCUSDT")
+        print(f"BTCUSDT last price = {price}")
+    except Exception as e:
+        print("Error fetching BTCUSDT:", e)
