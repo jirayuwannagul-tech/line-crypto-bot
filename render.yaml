@@ -174,6 +174,8 @@ services:
         value: BTCUSDT
       - key: JOB_BROADCAST
         value: "1"
+      - key: LINE_CHANNEL_SECRET
+        sync: false
       - key: LINE_CHANNEL_ACCESS_TOKEN
         sync: false
 
@@ -199,9 +201,9 @@ services:
         value: baseline
       - key: JOB_BROADCAST
         value: "1"
-      - key: LINE_CHANNEL_ACCESS_TOKEN
-        sync: false
       - key: LINE_CHANNEL_SECRET
+        sync: false
+      - key: LINE_CHANNEL_ACCESS_TOKEN
         sync: false
 
   - type: cron
@@ -218,6 +220,8 @@ services:
     envVars:
       - key: ENV
         value: production
+      - key: LINE_CHANNEL_SECRET
+        sync: false
       - key: LINE_CHANNEL_ACCESS_TOKEN
         sync: false
       - key: NEWS_PUSH_ENABLED
