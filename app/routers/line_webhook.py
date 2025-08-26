@@ -125,7 +125,11 @@ async def line_webhook(request: Request) -> Dict[str, Any]:
             log.exception("LINE webhook event error: %s", e)
 
     return {"ok": True}
-import os
+
+
+# =============================================================================
+# LINE BOT API fallback
+# =============================================================================
 try:
     from linebot import LineBotApi
     LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
