@@ -125,11 +125,3 @@ async def line_webhook(request: Request) -> Dict[str, Any]:
             log.exception("LINE webhook event error: %s", e)
 
     return {"ok": True}
-
-try:
-    line_bot_api  # noqa: F821
-except NameError:
-    class _LineAPINoop:
-        def reply_message(self, *args, **kwargs):
-            return None
-    line_bot_api = _LineAPINoop()
