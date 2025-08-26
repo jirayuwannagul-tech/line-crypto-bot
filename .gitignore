@@ -40,3 +40,8 @@ backtest/
 # ==== System files ====
 .DS_Store
 Thumbs.db
+
+# large archives
+project_code_only.zip
+project_all_code.zip
+*.zip
