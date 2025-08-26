@@ -11,7 +11,8 @@ from __future__ import annotations
 from typing import Dict, Any, Optional, List
 import logging
 
-from app.engine.signal_engine import build_signal_payload, build_line_text
+from app.engine.signal_engine import build_signal_payload
+from app.analysis.entry_exit import suggest_trade, format_trade_text
 from app.adapters import price_provider
 
 logger = logging.getLogger(__name__)
@@ -19,11 +20,6 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # LAYER B) CORE SERVICE FUNCTIONS
 # -----------------------------------------------------------------------------
-# อธิบาย:
-# - ฟังก์ชันใน layer นี้เป็น abstraction ที่เรียบง่าย
-# - สามารถใช้ได้ทั้งใน jobs (scheduler) และ routers (LINE webhook)
-# =============================================================================
-
 def analyze_and_get_payload(
     symbol: str,
     tf: str,
@@ -55,17 +51,17 @@ def analyze_and_get_text(
     วิเคราะห์และคืนข้อความสรุปสั้น (string) อย่างเดียว
     เหมาะสำหรับ push/reply LINE โดยตรง
     """
-    return build_line_text(symbol, tf, profile=profile, cfg=cfg, xlsx_path=xlsx_path)
-
+    try:
+        # ใช้ entry_exit formatter ใหม่แทน build_line_text เดิม
+        trade = suggest_trade(None, symbol=symbol, tf=tf, cfg={"profile": profile or "baseline", **(cfg or {}), "xlsx_path": xlsx_path})
+        return format_trade_text(trade)
+    except Exception as e:
+        logger.exception(f"Signal format error: {e}")
+        return f"{symbol} {tf} ❌ error: {e}"
 
 # =============================================================================
 # LAYER C) BATCH CONVENIENCE
 # -----------------------------------------------------------------------------
-# อธิบาย:
-# - ใช้รันหลาย symbol/timeframe พร้อมกัน (เช่น ใน job)
-# - คืนเป็น list ของผลลัพธ์
-# =============================================================================
-
 def analyze_batch(
     symbols: List[str],
     tfs: List[str],
@@ -93,15 +89,9 @@ def analyze_batch(
                 )
     return results
 
-
 # =============================================================================
 # LAYER D) PRICE FETCH SERVICE (ใหม่, Binance ผ่าน ccxt)
 # -----------------------------------------------------------------------------
-# อธิบาย:
-# - เพิ่ม service function สำหรับดึงราคาแบบ real-time
-# - เรียกจาก adapter.price_provider
-# =============================================================================
-
 def fetch_price(symbol: str = "BTC/USDT") -> Optional[float]:
     """
     คืนราคาล่าสุดจาก Binance (float) ผ่าน ccxt
