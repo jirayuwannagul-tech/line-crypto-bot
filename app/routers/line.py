@@ -82,9 +82,9 @@ def line_push(body: PushBody) -> Dict[str, Any]:
     ใช้สำหรับแจ้งเตือนจาก jobs หรือ admin tool
     """
     try:
-    client = _client()
-    client = client() if callable(client) else client
-    client.push_text(body.to, body.text)
+        client = _client()
+        client = client() if callable(client) else client
+        client.push_text(body.to, body.text)
         return {"ok": True}
     except Exception as e:
         log.exception("push error: %s", e)
