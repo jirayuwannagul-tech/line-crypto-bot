@@ -1,5 +1,42 @@
+# ==== Python ====
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+*.egg
+*.log
+
+# Virtual environment
 .venv/
+env/
+venv/
+
+# IDE settings
+.vscode/
+.idea/
+
+# ==== Environment & Secrets ====
 .env
-__pycache__/
+*.env
+
+# ==== SQLite database ====
+*.db
+*.sqlite
+*.sqlite3
+
+# ==== Output & Reports ====
+output/
+reports/
+logs/
+backtest/
+*.csv
+*.xlsx
+
+# ==== Jupyter Notebook checkpoints ====
+.ipynb_checkpoints/
+
+# ==== System files ====
+.DS_Store
+Thumbs.db

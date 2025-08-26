@@ -1,3 +1,0 @@
-analysis_start,analysis_end,trend_daily,trend_pred,confidence,forward_start,forward_end,real_trend,actionable,hit,skip_reason
-2019-08-01,2019-08-31,SIDE,SIDE,30.0,2019-09-01,2019-09-30,DOWN,0,,SIDE
-2019-09-01,2019-09-30,SIDE,SIDE,30.0,2019-10-01,2019-10-31,UP,0,,SIDE
