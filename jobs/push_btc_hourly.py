@@ -71,57 +71,68 @@ def _get_bool_env(name: str, default: bool = False) -> bool:
     if v in ("0", "false", "no", "n", "off"): return False
     return default
 
+# [ไฟล์] jobs/push_btc_hourly.py (แทนที่ฟังก์ชัน main ทั้งก้อน)
 def main() -> int:
     symbol  = _env("JOB_SYMBOL", "BTCUSDT")
-    tf      = _env("JOB_TF", "1H")
     profile = _env("STRATEGY_PROFILE", "baseline")
     xlsx    = _env("HISTORICAL_XLSX_PATH", None)
     do_broadcast = _get_bool_env("JOB_BROADCAST", False)
 
-    try:
-        df = get_data(symbol, tf, xlsx_path=xlsx)
-        log.info("DEBUG: get_data returned %s rows", 0 if df is None else len(df))
-    except Exception as e:
-        log.error("Data fetch error: %s", e)
-        log.debug("Traceback:\n%s", traceback.format_exc())
-        return 20
+    tfs = ["1D", "4H", "1H"]  # ยึด 1D เป็นภาพรวม และแนบบริบท 4H/1H
+    texts: dict[str, str] = {}
+    rows_count: dict[str, int] = {}
 
-    if df is None or getattr(df, "empty", False) or len(df) < 5:
-        log.warning("No/low data for %s %s (len=%s). Try quick fill via ccxt…", symbol, tf, 0 if df is None else len(df))
-        if _quick_fill_csv(symbol, tf, limit=1200):
-            try:
-                df = get_data(symbol, tf, xlsx_path=xlsx)
-            except Exception as e:
-                log.error("Data fetch error after quick fill: %s", e)
-                return 20
-
-    # --- fallback ถ้า 1H ยังว่าง → ลอง 1D ---
-    if df is None or getattr(df, "empty", False) or len(df) < 5:
-        log.warning("Fallback to 1D timeframe…")
-        tf = "1D"
+    for tf in tfs:
         try:
             df = get_data(symbol, tf, xlsx_path=xlsx)
+            n = 0 if df is None else len(df)
+            rows_count[tf] = n
+            log.info("DEBUG: %s get_data returned %s rows", tf, n)
         except Exception as e:
-            log.error("Data fetch error fallback 1D: %s", e)
-            return 20
-        if df is None or getattr(df, "empty", False) or len(df) < 5:
-            log.error("No data for %s %s (len=%s). Abort analyze.", symbol, tf, 0 if df is None else len(df))
-            return 21
+            log.error("[%s] Data fetch error: %s", tf, e)
+            continue
 
-    cfg = {"profile": profile}
-    log.info("Analyzing %s %s with profile=%s", symbol, tf, profile)
+        if n < 5 or df is None or getattr(df, "empty", False):
+            log.warning("[%s] No/low data for %s (len=%s), skip.", tf, symbol, n)
+            continue
 
-    try:
-        text = analyze_and_get_text(symbol, tf, profile=profile, cfg=cfg, xlsx_path=xlsx)
-    except Exception as e:
-        log.error("Analyze failed: %s", e)
-        log.debug("Traceback:\n%s", traceback.format_exc())
-        return 10
+        try:
+            txt = analyze_and_get_text(symbol, tf, profile=profile, cfg={"profile": profile}, xlsx_path=xlsx)
+            if txt and str(txt).strip():
+                texts[tf] = str(txt).strip()
+            else:
+                log.warning("[%s] Empty analysis text", tf)
+        except Exception as e:
+            log.error("[%s] Analyze failed: %s", tf, e)
 
-    if not text or not str(text).strip():
-        log.error("Empty analysis text; abort sending.")
+    # รวมผล: ให้ 1D เป็นสรุปหลัก แล้วตามด้วย 4H/1H แบบย่อ
+    if "1D" not in texts and not texts:
+        log.error("No signals generated (1D missing and no other TF).")
         return 11
 
+    lines = []
+    header = f"📊 {symbol} — Multi-TF Summary (profile={profile})"
+    lines.append(header)
+
+    # สรุปหลักจาก 1D
+    if "1D" in texts:
+        lines.append("\n[1D] สรุปภาพรวม")
+        lines.append(texts["1D"])
+    else:
+        lines.append("\n[1D] สรุปภาพรวม: (ไม่มีข้อมูลหรือวิเคราะห์ไม่สำเร็จ)")
+
+    # แนบบริบทจาก 4H/1H
+    for tf in ["4H", "1H"]:
+        if tf in texts:
+            lines.append(f"\n[{tf}] บริบทระยะสั้น")
+            lines.append(texts[tf])
+        else:
+            n = rows_count.get(tf, 0)
+            lines.append(f"\n[{tf}] บริบทระยะสั้น: (ไม่มีสัญญาณ / len={n})")
+
+    final_text = "\n".join(lines)
+
+    # ส่ง LINE
     access = _env("LINE_CHANNEL_ACCESS_TOKEN")
     secret = _env("LINE_CHANNEL_SECRET")
     if not access or not secret:
@@ -130,19 +141,20 @@ def main() -> int:
 
     client = LineDelivery(access, secret)
 
+    # ถ้าไม่กำหนด LINE_DEFAULT_TO ให้บังคับ broadcast
     if not do_broadcast and not _env("LINE_DEFAULT_TO"):
         do_broadcast = True
 
     if do_broadcast:
-        log.info("Broadcasting signal…")
-        resp = client.broadcast_text(text)
+        log.info("Broadcasting multi-TF signal…")
+        resp = client.broadcast_text(final_text)
     else:
         to_id = _env("LINE_DEFAULT_TO")
         if not to_id:
             log.error("Missing LINE_DEFAULT_TO for push")
             return 3
-        log.info("Pushing to %s …", to_id)
-        resp = client.push_text(to_id, text)
+        log.info("Pushing multi-TF signal to %s …", to_id)
+        resp = client.push_text(to_id, final_text)
 
     if not resp.get("ok"):
         log.error("LINE send failed: %s", resp)
@@ -150,6 +162,3 @@ def main() -> int:
 
     log.info("Job done.")
     return 0
-
-if __name__ == "__main__":
-    raise SystemExit(main())
