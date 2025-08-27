@@ -1,3 +1,4 @@
+# jobs/watch_targets.py
 """
 watch_targets.py
 ================
@@ -58,33 +59,33 @@ def check_plan(plan: Dict[str, Any]) -> None:
     hit_messages = []
 
     if direction == "SHORT":
-        if not plan.get("tp1_hit") and price <= tp1:
+        if not plan.get("tp1_hit") and price <= tp1 and tp1 > 0:
             trade_plan_store.mark_target_hit(ts, "tp1")
             hit_messages.append(f"✅ TP1 {tp1} hit @ {price}")
-        if not plan.get("tp2_hit") and price <= tp2:
+        if not plan.get("tp2_hit") and price <= tp2 and tp2 > 0:
             trade_plan_store.mark_target_hit(ts, "tp2")
             hit_messages.append(f"✅ TP2 {tp2} hit @ {price}")
-        if not plan.get("tp3_hit") and price <= tp3:
+        if not plan.get("tp3_hit") and price <= tp3 and tp3 > 0:
             trade_plan_store.mark_target_hit(ts, "tp3")
             trade_plan_store.mark_closed(ts, "TP3 reached")
             hit_messages.append(f"🏆 TP3 {tp3} hit @ {price} → Plan Closed")
-        if not plan.get("sl_hit") and price >= sl:
+        if not plan.get("sl_hit") and price >= sl and sl > 0:
             trade_plan_store.mark_target_hit(ts, "sl")
             trade_plan_store.mark_closed(ts, "Stop Loss")
             hit_messages.append(f"❌ SL {sl} hit @ {price} → Plan Closed")
 
     elif direction == "LONG":
-        if not plan.get("tp1_hit") and price >= tp1:
+        if not plan.get("tp1_hit") and price >= tp1 and tp1 > 0:
             trade_plan_store.mark_target_hit(ts, "tp1")
             hit_messages.append(f"✅ TP1 {tp1} hit @ {price}")
-        if not plan.get("tp2_hit") and price >= tp2:
+        if not plan.get("tp2_hit") and price >= tp2 and tp2 > 0:
             trade_plan_store.mark_target_hit(ts, "tp2")
             hit_messages.append(f"✅ TP2 {tp2} hit @ {price}")
-        if not plan.get("tp3_hit") and price >= tp3:
+        if not plan.get("tp3_hit") and price >= tp3 and tp3 > 0:
             trade_plan_store.mark_target_hit(ts, "tp3")
             trade_plan_store.mark_closed(ts, "TP3 reached")
             hit_messages.append(f"🏆 TP3 {tp3} hit @ {price} → Plan Closed")
-        if not plan.get("sl_hit") and price <= sl:
+        if not plan.get("sl_hit") and price <= sl and sl > 0:
             trade_plan_store.mark_target_hit(ts, "sl")
             trade_plan_store.mark_closed(ts, "Stop Loss")
             hit_messages.append(f"❌ SL {sl} hit @ {price} → Plan Closed")
