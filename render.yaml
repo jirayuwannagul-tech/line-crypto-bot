@@ -65,30 +65,7 @@ services:
   # CRON LAYER — scheduled jobs (UTC)
   # ---------------------------------------------------------------------------
 
-  # 1) ส่งราคา BTC รายชั่วโมง
-  - type: cron
-    name: line-crypto-hourly-btc-price
-    env: python
-    schedule: "0 * * * *"
-    buildCommand: |
-      pip install -r requirements.txt
-    startCommand: |
-      PYTHONPATH=. python scripts/push_price_hourly.py
-    envVars:
-      - key: ENV
-        value: production
-      - key: QUOTE_ASSET
-        value: USDT
-      - key: PRICE_SYMBOL
-        value: BTCUSDT
-      - key: JOB_BROADCAST
-        value: "1"
-      - key: LINE_CHANNEL_SECRET
-        sync: false
-      - key: LINE_CHANNEL_ACCESS_TOKEN
-        sync: false
-
-  # 2) วิเคราะห์ BTC รายชั่วโมง
+  # วิเคราะห์ BTC รายชั่วโมง
   - type: cron
     name: line-crypto-hourly-btc-analysis
     env: python
@@ -113,7 +90,7 @@ services:
       - key: LINE_CHANNEL_ACCESS_TOKEN
         sync: false
 
-  # 3) ดึงข่าวรายชั่วโมง + แปลไทย + กระจาย
+  # ดึงข่าวรายชั่วโมง + แปลไทย + กระจาย
   - type: cron
     name: line-crypto-hourly-news
     env: python
@@ -182,7 +159,7 @@ services:
       - key: OPENAI_CHAT_COMPLETIONS_ENDPOINT
         value: "https://api.openai.com/v1/chat/completions"
 
-  # 4) เฝ้าระวัง TP/SL (แทน worker เดิม) ทุก 5 นาที
+  # เฝ้าระวัง TP/SL (แทน worker เดิม) ทุก 5 นาที
   - type: cron
     name: line-crypto-watch
     env: python
