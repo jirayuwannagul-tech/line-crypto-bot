@@ -1,4 +1,5 @@
-# app/engine/signal_engine.py
+# [ไฟล์] app/engine/signal_engine.py  (แทนที่ทั้งไฟล์)
+
 from __future__ import annotations
 # =============================================================================
 # SIGNAL ENGINE FACADE
@@ -32,6 +33,9 @@ class SignalEngine:
             "rr": 1.5,
             "cooldown_sec": 0,
             "move_alerts": [],
+            # โหมดสด (ค่าเริ่มต้นปิดไว้)
+            "use_live": False,
+            "live_limit": 500,
         }
         if cfg:
             base_cfg.update(cfg)
@@ -54,6 +58,11 @@ class SignalEngine:
         profile: Optional[str] = None,
         cfg: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        """
+        วิเคราะห์สัญญาณผ่าน wave_service.analyze_wave
+        - รองรับโหมดสดด้วย cfg['use_live']=True (จะไปดึง OHLCV จาก Binance ผ่าน price_provider)
+        - ถ้า use_live=False จะอ่านจาก Excel ตามเดิม
+        """
         runtime_cfg = dict(self.cfg)
         if cfg:
             runtime_cfg.update(cfg)
@@ -82,6 +91,22 @@ class SignalEngine:
                 "payload": {},
                 "error": f"{e.__class__.__name__}: {e}\n{traceback.format_exc()}",
             }
+
+    def analyze_symbol_live(
+        self,
+        symbol: str,
+        tf: str = "1H",
+        *,
+        profile: Optional[str] = None,
+        live_limit: int = 500,
+        cfg: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        ช็อตคัตโหมดสด: บังคับเปิด use_live และตั้ง live_limit ได้
+        """
+        use_cfg = dict(cfg or {})
+        use_cfg.update({"use_live": True, "live_limit": int(live_limit)})
+        return self.analyze_symbol(symbol, tf=tf, profile=profile, cfg=use_cfg)
 
     # --------- Helpers for compat engine ---------
     def _st(self, symbol: str) -> Dict[str, Any]:
@@ -298,7 +323,20 @@ def build_signal_payload(
     profile: Optional[str] = None,
     cfg: Optional[Dict[str, Any]] = None,
     xlsx_path: Optional[str] = None,
+    use_live: Optional[bool] = None,
+    live_limit: Optional[int] = None,
 ) -> Dict[str, Any]:
+    """
+    Wrapper เรียกใช้ง่าย:
+      - ถ้าระบุ use_live=True → บังคับโหมดสดและตั้ง live_limit ได้
+      - ถ้าไม่ระบุ → ใช้ cfg / ค่าดีฟอลต์ของ SignalEngine
+    """
+    cfg = dict(cfg or {})
+    if use_live is True:
+        cfg["use_live"] = True
+    if isinstance(live_limit, int) and live_limit > 0:
+        cfg["live_limit"] = int(live_limit)
+
     engine = SignalEngine(cfg=cfg, xlsx_path=xlsx_path)
     return engine.analyze_symbol(symbol, tf, profile=profile, cfg=cfg)
 
@@ -309,8 +347,13 @@ def build_line_text(
     profile: Optional[str] = None,
     cfg: Optional[Dict[str, Any]] = None,
     xlsx_path: Optional[str] = None,
+    use_live: Optional[bool] = None,
+    live_limit: Optional[int] = None,
 ) -> str:
-    payload = build_signal_payload(symbol, tf, profile=profile, cfg=cfg, xlsx_path=xlsx_path)
+    payload = build_signal_payload(
+        symbol, tf, profile=profile, cfg=cfg, xlsx_path=xlsx_path,
+        use_live=use_live, live_limit=live_limit
+    )
     if payload.get("ok"):
         return payload.get("text", "")
     err = payload.get("error") or "unknown error"

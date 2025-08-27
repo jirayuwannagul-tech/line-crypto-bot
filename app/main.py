@@ -1,15 +1,30 @@
+# [ไฟล์] app/main.py  (แทนที่เฉพาะส่วนโหลด .env ด้านบน)
+
+from __future__ import annotations
+
+# โหลด ENV จากไฟล์ .env ตั้งแต่เริ่มรันแอป (รองรับ REPL/inline)
+from dotenv import load_dotenv, find_dotenv
+import os
+env_path = find_dotenv(usecwd=True)
+if not env_path or not os.path.exists(env_path):
+    env_path = ".env"
+load_dotenv(env_path)
+
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
-
 # ---- Routers ----
 from app.routers.health import router as health_router
 from app.routers.chat import router as chat_router
 from app.routers.line_webhook import router as line_router
 from app.routers.analyze import router as analyze_router
 
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # (ใส่ init/teardown ได้ที่นี่ หากต้องใช้ในอนาคต)
     yield
+
 
 def create_app() -> FastAPI:
     app = FastAPI(
@@ -26,7 +41,9 @@ def create_app() -> FastAPI:
     app.include_router(analyze_router, prefix="/analyze")
     return app
 
+
 app = create_app()
+
 
 @app.get("/")
 def index():

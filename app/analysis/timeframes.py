@@ -1,4 +1,3 @@
-# app/analysis/timeframes.py
 from __future__ import annotations
 
 import os

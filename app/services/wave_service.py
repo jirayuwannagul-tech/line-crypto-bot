@@ -1,4 +1,3 @@
-# app/services/wave_service.py
 # -----------------------------------------------------------------------------
 # Orchestrator for wave analysis pipeline.
 # Load data -> compute scenarios (Dow + Elliott + Fibo + Indicators) -> payload.
@@ -10,11 +9,15 @@ import pandas as pd
 import math
 
 from app.analysis.timeframes import get_data
-# 🔧 ใช้ logic layer
+# 🔧 logic layer
 from app.logic.scenarios import analyze_scenarios
 from app.logic.elliott_logic import classify_elliott_with_kind
+# �� live data (ccxt/binance) — safe wrapper
+from app.adapters.price_provider import get_ohlcv_ccxt_safe
+
 
 __all__ = ["analyze_wave", "build_brief_message"]
+
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -48,6 +51,21 @@ def _fmt_num(v: Optional[float]) -> Optional[str]:
     return None
 
 
+def _to_pair(symbol: str) -> str:
+    """
+    สร้างรูปแบบคู่เทรดสำหรับ live data:
+    - ถ้า symbol มี "/" อยู่แล้ว → คืนเดิม
+    - ถ้าเป็น BTCUSDT → แปลงเป็น BTC/USDT
+    - อื่น ๆ → ผูกกับ USDT โดยอัตโนมัติ เช่น BTC → BTC/USDT
+    """
+    s = (symbol or "").strip().upper()
+    if "/" in s:
+        return s
+    if s.endswith("USDT") and len(s) > 4:
+        return f"{s[:-4]}/USDT"
+    return f"{s}/USDT"
+
+
 # -----------------------------------------------------------------------------
 # Public API
 # -----------------------------------------------------------------------------
@@ -60,19 +78,27 @@ def analyze_wave(
 ) -> Dict[str, Any]:
     """
     End-to-end analysis:
-      - Load OHLCV from Excel (rules-only)
-      - Run scenarios analyzer (+ optional Weekly context)
-      - Attach TP/SL rules
-      - Return payload ready for delivery
+      - หาก cfg['use_live'] เป็น True: โหลด OHLCV จาก Binance (ผ่าน price_provider)
+      - ไม่เช่นนั้น: โหลดจาก Excel/CSV (ผ่าน timeframes.get_data)
+      - Run scenarios (+ optional Weekly context)
+      - แนบ TP/SL (3%,5%,7% / SL 3%) และ metadata พื้นฐาน
     """
-    # 1) Load main TF data
-    try:
-        df: pd.DataFrame = get_data(symbol, tf, xlsx_path=xlsx_path)
-    except (FileNotFoundError, ValueError) as e:
-        return _neutral_payload(symbol, tf, e)
+    cfg = cfg or {}
 
-    if df is None or df.empty:
-        return _neutral_payload(symbol, tf)
+    # 1) Load main TF data (live หรือ file)
+    try:
+        if cfg.get("use_live"):
+            limit = int(cfg.get("live_limit", 500))
+            pair = _to_pair(symbol)
+            df: pd.DataFrame = get_ohlcv_ccxt_safe(pair, tf, limit)
+            if df is None or df.empty:
+                return _neutral_payload(symbol, tf, err=RuntimeError("no live OHLCV"))
+        else:
+            df: pd.DataFrame = get_data(symbol, tf, xlsx_path=xlsx_path)
+            if df is None or df.empty:
+                return _neutral_payload(symbol, tf)
+    except Exception as e:
+        return _neutral_payload(symbol, tf, e)
 
     # 2) Merge config (safe defaults)
     base_cfg: Dict[str, Any] = {"elliott": {"allow_diagonal": True}}
@@ -81,20 +107,22 @@ def analyze_wave(
     # 3) Weekly context (1W) — best effort
     weekly_ctx: Optional[Dict[str, Any]] = None
     try:
-        weekly_df: pd.DataFrame = get_data(symbol, "1W", xlsx_path=xlsx_path)
-        if weekly_df is not None and not weekly_df.empty:
-            weekly_ctx = classify_elliott_with_kind(weekly_df, timeframe="1W")
+        if cfg.get("use_live"):
+            wdf = get_ohlcv_ccxt_safe(_to_pair(symbol), "1W", int(cfg.get("live_limit", 500)))
+        else:
+            wdf = get_data(symbol, "1W", xlsx_path=xlsx_path)
+        if wdf is not None and not wdf.empty:
+            weekly_ctx = classify_elliott_with_kind(wdf, timeframe="1W")
     except Exception:
-        weekly_ctx = None  # fail-safe: continue without weekly
+        weekly_ctx = None  # fail-safe
 
-    # 4) Run scenarios (try with weekly_ctx then fallback)
+    # 4) Run scenarios (รองรับ weekly_ctx ถ้ามี)
     try:
         payload = analyze_scenarios(df, symbol=symbol, tf=tf, cfg=merged_cfg, weekly_ctx=weekly_ctx)
     except TypeError:
-        # for older versions of analyze_scenarios without weekly_ctx param
         payload = analyze_scenarios(df, symbol=symbol, tf=tf, cfg=merged_cfg)
 
-    # 5) Attach last price/time (surface for LINE text)
+    # 5) Attach last price/time (surface สำหรับ LINE text)
     last = df.iloc[-1]
     px = float(last.get("close", float("nan")))
     payload["last"] = {
@@ -121,7 +149,7 @@ def analyze_wave(
     payload["symbol"] = symbol
     payload["tf"] = tf
 
-    # 8) Optionally surface weekly bias into levels.elliott.current.weekly_bias
+    # 8) Surface weekly bias (ถ้ามี)
     try:
         if weekly_ctx:
             lv = payload.setdefault("levels", {})
@@ -172,6 +200,11 @@ def build_brief_message(payload: Dict[str, Any]) -> str:
     except Exception:
         pass
 
+    def _fmt_num(v: Optional[float]) -> Optional[str]:
+        if isinstance(v, (int, float)) and not math.isnan(v):
+            return f"{v:,.2f}"
+        return None
+
     lines: List[str] = []
     header = f"{sym} ({tf}){weekly_line}"
     lines.append(header)
@@ -190,7 +223,6 @@ def build_brief_message(payload: Dict[str, Any]) -> str:
     if ema50_txt and ema200_txt:
         lines.append(f"EMA50 {ema50_txt} / EMA200 {ema200_txt}")
 
-    # ✅ เพิ่ม TP/SL rule ในข้อความ (ใช้ %)
     tp_txt = " / ".join([f"{int(t * 100)}%" for t in tp_pct])
     lines.append(f"TP: {tp_txt} | SL: {int(sl_pct * 100)}%")
 
@@ -202,7 +234,6 @@ def build_brief_message(payload: Dict[str, Any]) -> str:
 
     # === Trading Plans block (terminal-friendly) ===
     try:
-        # cast values for math
         px_val = float(px) if isinstance(px, (int, float)) else float("nan")
         rh_val = float(rh) if isinstance(rh, (int, float)) else None
         rl_val = float(rl) if isinstance(rl, (int, float)) else None
@@ -211,19 +242,18 @@ def build_brief_message(payload: Dict[str, Any]) -> str:
         lines.append("")
         lines.append(f"แผนเทรดที่แนะนำตอนนี้ (Weekly = {wb_for_plan}, 1D bias ขึ้น/ลง/ข้าง = {up}%/{down}%/{side}%)")
 
-        # A) Short – Breakout (ปลอดภัยกว่า): entry = หลุด recent low (rl)
+        # A) Short – Breakout
         if rl_val and rl_val > 0:
             entry = rl_val
             lines.append("")
             lines.append("A) Short – Breakout (ปลอดภัยกว่า)")
             lines.append(f"Entry: หลุด {entry:,.2f}")
-            # TP/SL fixed percent from entry
             tp1, tp2, tp3 = entry * 0.97, entry * 0.95, entry * 0.93
             sl = entry * 1.03
             lines.append(f"TP1 −3%: {tp1:,.2f} | TP2 −5%: {tp2:,.2f} | TP3 −7%: {tp3:,.2f}")
             lines.append(f"SL +3%: {sl:,.2f}")
 
-        # B) Short – Pullback (เชิงรุก/RR ดีกว่า): entry = รีเจ็กต์แถว EMA50
+        # B) Short – Pullback
         if ema50_val and ema50_val > 0:
             entry = ema50_val
             lines.append("")
@@ -234,7 +264,7 @@ def build_brief_message(payload: Dict[str, Any]) -> str:
             lines.append(f"TP1 −3%: {tp1:,.2f} | TP2 −5%: {tp2:,.2f} | TP3 −7%: {tp3:,.2f}")
             lines.append(f"SL +3%: {sl:,.2f}")
 
-        # C) Long – แผนสำรอง (ถ้ากลับตัวแรง): entry = ทะลุ recent high (rh)
+        # C) Long – แผนสำรอง
         if rh_val and rh_val > 0:
             entry = rh_val
             lines.append("")
@@ -245,7 +275,6 @@ def build_brief_message(payload: Dict[str, Any]) -> str:
             lines.append(f"TP1 +3%: {tp1:,.2f} | TP2 +5%: {tp2:,.2f} | TP3 +7%: {tp3:,.2f}")
             lines.append(f"SL −3%: {sl:,.2f}")
     except Exception:
-        # อย่าทำให้ข้อความหลักพัง หากคำนวณส่วนเสริมล้มเหลว
         pass
 
     return "\n".join(lines)
