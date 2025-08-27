@@ -1,222 +1,134 @@
-# [ไฟล์] app/adapters/price_provider.py  (แทนที่ทั้งไฟล์)
-
 from __future__ import annotations
 
-from typing import Optional, List
+from typing import Optional
+import re
 import pandas as pd
 
-# =============================================================================
-# LAYER A) เดิม (ยังคงใช้ได้อยู่)  — ใช้ยูทิลเดิมของโปรเจกต์ (async)
-# =============================================================================
-from app.utils.crypto_price import get_price, get_price_text, get_price_usd
-
-__all__ = [
-    # Layer A (legacy async utils)
-    "fetch_spot",
-    "fetch_spot_text",
-    "legacy_get_price_usd",
-    # Layer B (ccxt / Binance spot ticker)
-    "get_spot_ccxt",
-    "get_spot_text_ccxt",
-    "get_spot_ccxt_safe",
-    "get_spot_text_ccxt_safe",
-    # Layer C (ccxt OHLCV)
-    "get_ohlcv_ccxt",
-    "get_ohlcv_ccxt_safe",
-]
-
-# ------------------------------
-# Layer A — legacy async utils
-# ------------------------------
-# ใช้ใน engine (ตัวเลข)
-async def fetch_spot(symbol: str, vs: str = "USDT") -> Optional[float]:
-    """
-    ดึงราคาล่าสุดแบบ async ผ่านยูทิลเดิมของโปรเจกต์
-    symbol = 'BTC', vs = 'USDT'  → ได้ราคา BTCUSDT (float) หรือ None
-    """
-    return await get_price(symbol, vs)
-
-# ใช้ใน LINE (ข้อความ)
-async def fetch_spot_text(symbol: str, vs: str = "USDT") -> str:
-    """
-    ดึงราคาล่าสุดแบบข้อความ (พร้อมฟอร์แมต) ผ่านยูทิลเดิมของโปรเจกต์
-    """
-    return await get_price_text(symbol, vs)
-
-# สำหรับโค้ดเก่า
-async def legacy_get_price_usd(symbol: str) -> Optional[float]:
-    """
-    ดึงราคาเทียบ USD ผ่านยูทิลเดิม (คงไว้เพื่อความเข้ากันได้ย้อนหลัง)
-    """
-    return await get_price_usd(symbol)
+# ==============================
+# Public API
+# ==============================
+__all__ = ["get_ohlcv_ccxt_safe"]
 
 
-# =============================================================================
-# Utilities (ใช้ร่วมกัน)
-# =============================================================================
-def _normalize_symbol(symbol: str, vs: str | None = None) -> str:
+# ---------- Helpers ----------
+_BINANCE_INTERVAL = {
+    "1M": "1m",
+    "5M": "5m",
+    "15M": "15m",
+    "30M": "30m",
+    "1H": "1h",
+    "4H": "4h",
+    "1D": "1d",
+    "1W": "1w",
+}
+
+def _to_binance_symbol(symbol: str) -> str:
     """
-    แปลงรูปแบบสัญลักษณ์ให้เป็นของ ccxt:
-      - 'BTCUSDT' → 'BTC/USDT'
-      - ('BTC','USDT') → 'BTC/USDT'
-      - ถ้าเป็น 'BTC/USDT' อยู่แล้ว → คืนเดิม
+    Normalizes pair to Binance format.
+    - 'BTC/USDT' -> 'BTCUSDT'
+    - 'BTCUSDT'  -> 'BTCUSDT'
+    - 'BTC'      -> 'BTCUSDT' (default quote = USDT)
     """
     s = (symbol or "").strip().upper()
-    if "/" in s:
+    if "/" in s or ":" in s or "-" in s:
+        s = s.replace(":", "/").replace("-", "/")
+        parts = [p for p in s.split("/") if p]
+        if len(parts) == 2:
+            return f"{parts[0]}{parts[1]}"
+    # already like BTCUSDT?
+    if re.fullmatch(r"[A-Z0-9]{5,}", s):
         return s
-    # กรณีส่งมาแบบ pair รวม เช่น BTCUSDT
-    if vs is None and len(s) > 3 and s.endswith("USDT"):
-        base = s[:-4]
-        return f"{base}/USDT"
-    if vs:
-        return f"{s}/{vs.strip().upper()}"
-    # fallback (พยายามเดา)
-    return s
+    return f"{s}USDT"
 
 
-def _to_ccxt_tf(tf: str) -> str:
+def _interval_to_binance(tf: str) -> str:
+    return _BINANCE_INTERVAL.get((tf or "").upper(), "1d")
+
+
+def _to_dataframe_ohlcv(rows) -> pd.DataFrame:
     """
-    แมพ timeframe ภายในโปรเจกต์ → ccxt
-    รองรับชุดที่ใช้บ่อย: 1M,1W,3D,1D,12H,8H,6H,4H,2H,1H,30M,15M,5M,3M,1M
-    หมายเหตุ: 1S ไม่รองรับใน ccxt/binance มาตรฐาน
+    rows: list of klines from Binance or ccxt:
+      [openTime, open, high, low, close, volume, closeTime, ...]
     """
-    t = (tf or "").upper()
-    m = {
-        "1M": "1m",
-        "3M": "3m",
-        "5M": "5m",
-        "15M": "15m",
-        "30M": "30m",
-        "1H": "1h",
-        "2H": "2h",
-        "4H": "4h",
-        "6H": "6h",
-        "8H": "8h",
-        "12H": "12h",
-        "1D": "1d",
-        "3D": "3d",
-        "1W": "1w",
-        "1MO": "1M",  # บางที่ใช้ 1MO = 1 Month
-        "1MONTH": "1M",
-    }
-    return m.get(t, t.lower())
+    if not rows:
+        return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+    data = []
+    for k in rows:
+        data.append({
+            "timestamp": pd.to_datetime(k[0], unit="ms", utc=True),
+            "open": float(k[1]),
+            "high": float(k[2]),
+            "low": float(k[3]),
+            "close": float(k[4]),
+            "volume": float(k[5]),
+        })
+    df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    # basic cleaning / sort
+    df = df.dropna().sort_values("timestamp").reset_index(drop=True)
+    return df
 
 
-# =============================================================================
-# LAYER B) ใหม่ — เชื่อม Binance API ผ่าน ccxt (synchronous)
-#   - ไม่แตะเลเยอร์เดิม
-#   - เพิ่มฟังก์ชันแบบ sync เหมาะกับสคริปต์หรือจุดที่ไม่ต้อง async
-#   - มี safe wrapper เผื่อ ccxt ไม่ได้ติดตั้ง หรือ API ล่ม → จะไม่ทำให้แอปล้ม
-# =============================================================================
-
-try:
-    import ccxt  # type: ignore
-
-    _exchange = ccxt.binance({
-        "enableRateLimit": True,
-        "timeout": 10_000,  # ms
-    })
-
-    def get_spot_ccxt(symbol: str = "BTC/USDT") -> Optional[float]:
-        """
-        ดึงราคาล่าสุดจาก Binance spot ผ่าน ccxt (sync)
-        ใช้สำหรับงานเร็ว ๆ ที่ไม่ต้อง async
-        """
-        try:
-            pair = _normalize_symbol(symbol)
-            ticker = _exchange.fetch_ticker(pair)
-            # ticker โครงสร้างทั่วไป: {'last': 12345.6, 'bid': ...}
-            return float(ticker["last"]) if "last" in ticker and ticker["last"] is not None else None
-        except Exception as e:
-            # NOTE: ห้าม raise เพื่อไม่ให้ล้มทั้งระบบในเคสเล็กน้อย เช่น เน็ตสะดุด
-            print(f"[price_provider] ccxt spot error: {e}")
-            return None
-
-    # ------------------------------
-    # LAYER C) OHLCV (ccxt)
-    # ------------------------------
-    def get_ohlcv_ccxt(symbol: str = "BTC/USDT", tf: str = "1D", limit: int = 500) -> pd.DataFrame:
-        """
-        ดึง OHLCV จาก Binance ผ่าน ccxt แล้วคืน DataFrame คอลัมน์มาตรฐาน:
-        ['timestamp','open','high','low','close','volume']
-        - timestamp เป็น UTC (tz-aware)
-        - limit สูงสุดที่ Binance รองรับโดยทั่วไปคือ 1500 (ccxt อาจจำกัด)
-        """
-        try:
-            pair = _normalize_symbol(symbol)
-            ccxt_tf = _to_ccxt_tf(tf)
-            if not isinstance(limit, int) or not (1 <= limit <= 1500):
-                limit = 500
-            raw = _exchange.fetch_ohlcv(pair, timeframe=ccxt_tf, limit=limit)
-            if not raw:
-                return pd.DataFrame(columns=["timestamp","open","high","low","close","volume"])
-            df = pd.DataFrame(raw, columns=["ts_ms","open","high","low","close","volume"])
-            # แปลงชนิดข้อมูล
-            for c in ["open","high","low","close","volume"]:
-                df[c] = pd.to_numeric(df[c], errors="coerce")
-            df["timestamp"] = pd.to_datetime(df["ts_ms"], unit="ms", utc=True)
-            out = df[["timestamp","open","high","low","close","volume"]].copy()
-            out.sort_values("timestamp", inplace=True, kind="stable", ignore_index=True)
-            return out
-        except Exception as e:
-            print(f"[price_provider] ccxt ohlcv error: {e}")
-            return pd.DataFrame(columns=["timestamp","open","high","low","close","volume"])
-
-except Exception as _ccxt_err:
-    # ไม่มี ccxt หรือสร้าง exchange ไม่ได้ → ให้ฟังก์ชันคืน None/DF ว่าง แบบนุ่มนวล
-    print(f"[price_provider] ccxt unavailable: {_ccxt_err}")
-
-    def get_spot_ccxt(symbol: str = "BTC/USDT") -> Optional[float]:  # type: ignore[no-redef]
-        """Fallback เมื่อ ccxt ใช้ไม่ได้: คืน None"""
-        return None
-
-    def get_ohlcv_ccxt(symbol: str = "BTC/USDT", tf: str = "1D", limit: int = 500) -> pd.DataFrame:  # type: ignore[no-redef]
-        """Fallback เมื่อ ccxt ใช้ไม่ได้: คืน DataFrame ว่าง"""
-        return pd.DataFrame(columns=["timestamp","open","high","low","close","volume"])
-
-
-def get_spot_text_ccxt(symbol: str = "BTC/USDT") -> str:
-    """
-    ดึงราคาล่าสุดจาก Binance spot (ข้อความสำหรับ LINE/Log)
-    """
-    price = get_spot_ccxt(symbol)
-    pair = _normalize_symbol(symbol)
-    if price is None:
-        return f"ไม่สามารถดึงราคาจาก Binance ได้ ({pair})"
-    return f"ราคาล่าสุด {pair} = {price:,.2f} USDT"
-
-
-# ------------------------------
-# Safe wrappers (เผื่ออยากใช้ที่ปลายทาง)
-# ------------------------------
-def get_spot_ccxt_safe(symbol: str = "BTC/USDT") -> Optional[float]:
-    """
-    รุ่นปลอดภัย: ถ้าพังจะคืน None (ไม่โยนข้อผิดพลาดออกไป)
-    """
+# ---------- Fallback: Binance REST ----------
+def _fetch_via_binance_rest(symbol: str, tf: str, limit: int) -> Optional[pd.DataFrame]:
+    import requests  # lazy import
+    sym = _to_binance_symbol(symbol)
+    interval = _interval_to_binance(tf)
+    url = "https://api.binance.com/api/v3/klines"
+    params = {"symbol": sym, "interval": interval, "limit": max(50, min(int(limit or 500), 1000))}
     try:
-        return get_spot_ccxt(symbol)
-    except Exception as e:
-        print(f"[price_provider] get_spot_ccxt_safe error: {e}")
+        r = requests.get(url, params=params, timeout=12)
+        r.raise_for_status()
+        return _to_dataframe_ohlcv(r.json())
+    except Exception:
         return None
 
 
-def get_spot_text_ccxt_safe(symbol: str = "BTC/USDT") -> str:
+# ---------- Try ccxt first, then fallback ----------
+def get_ohlcv_ccxt_safe(symbol: str, tf: str, limit: int = 500) -> pd.DataFrame:
     """
-    รุ่นปลอดภัย: คืนข้อความอธิบายผล (ไม่ throw)
-    """
-    try:
-        return get_spot_text_ccxt(symbol)
-    except Exception as e:
-        pair = _normalize_symbol(symbol)
-        return f"ไม่สามารถดึงราคาจาก Binance ได้ ({pair}) — {e}"
+    Returns pandas.DataFrame with columns:
+      timestamp(UTC), open, high, low, close, volume
 
-
-def get_ohlcv_ccxt_safe(symbol: str = "BTC/USDT", tf: str = "1D", limit: int = 500) -> pd.DataFrame:
+    Strategy:
+      1) Try ccxt.binance().fetch_ohlcv() if ccxt is installed
+      2) Fallback -> Binance REST /api/v3/klines
     """
-    รุ่นปลอดภัยสำหรับ OHLCV: พังแล้วคืน DataFrame ว่าง
-    """
+    # 1) ccxt path (optional)
     try:
-        return get_ohlcv_ccxt(symbol, tf=tf, limit=limit)
-    except Exception as e:
-        print(f"[price_provider] get_ohlcv_ccxt_safe error: {e}")
-        return pd.DataFrame(columns=["timestamp","open","high","low","close","volume"])
+        import ccxt  # type: ignore
+        binance = ccxt.binance({"options": {"defaultType": "spot"}})
+        sym = (symbol or "").upper()
+        if "/" not in sym:
+            # make sure ccxt format is BASE/QUOTE (e.g., BTC/USDT)
+            if sym.endswith("USDT") and len(sym) > 4:
+                sym = f"{sym[:-4]}/USDT"
+            else:
+                sym = f"{sym}/USDT"
+        timeframe = (tf or "1D").upper()
+        # Map to ccxt timeframe
+        ccxt_tf_map = {
+            "1M": "1m",
+            "5M": "5m",
+            "15M": "15m",
+            "30M": "30m",
+            "1H": "1h",
+            "4H": "4h",
+            "1D": "1d",
+            "1W": "1w",
+        }
+        ccxt_tf = ccxt_tf_map.get(timeframe, "1d")
+        candles = binance.fetch_ohlcv(sym, timeframe=ccxt_tf, limit=max(50, min(int(limit or 500), 1000)))
+        df = _to_dataframe_ohlcv(candles)
+        if not df.empty:
+            return df
+    except Exception:
+        # ignore and fallback to REST
+        pass
+
+    # 2) REST fallback
+    df2 = _fetch_via_binance_rest(symbol, tf, limit)
+    if df2 is not None and not df2.empty:
+        return df2
+
+    # empty frame on failure
+    return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
