@@ -28,6 +28,38 @@ import traceback
 from app.services.signal_service import analyze_and_get_text
 from app.adapters.delivery_line import LineDelivery
 from app.analysis.timeframes import get_data  # ✅ เพิ่ม: ใช้เช็กข้อมูลก่อนวิเคราะห์
+import pandas as pd
+from pathlib import Path
+
+import time
+try:
+    import ccxt
+except Exception:
+    ccxt = None
+from app.analysis import timeframes as tf_mod
+
+def _quick_fill_csv(symbol: str, tf_name: str, limit: int = 1200) -> bool:
+    """ดึง OHLCV ล่าสุดผ่าน ccxt แล้วเขียน CSV ไปที่ app/data เพื่อให้ get_data มองเห็น
+    รองรับ tf: 1H/4H/1D
+    """
+    if ccxt is None:
+        return False
+    tf_map = {'1H':'1h','4H':'4h','1D':'1d'}
+    if tf_name not in tf_map:
+        return False
+    ex = ccxt.binance()
+    try:
+        ohlcv = ex.fetch_ohlcv(symbol.replace('USDT','/USDT'), timeframe=tf_map[tf_name], limit=limit)
+    except Exception:
+        return False
+    if not ohlcv:
+        return False
+    import pandas as _pd
+    df = _pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
+    out = tf_mod._csv_path(symbol, tf_name)
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out, index=False)
+    return True
 
 log = logging.getLogger("jobs.push_btc_hourly")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -59,14 +91,23 @@ def main() -> int:
     # --- เช็กข้อมูลก่อน (กัน DataFrame ว่าง → IndexError)
     try:
         df = get_data(symbol, tf, xlsx_path=xlsx)  # อนุญาตให้ provider ภายในตัดสินใจว่าจะใช้ API/CSV/Excel
+        log.info("DEBUG: get_data returned %s rows", 0 if df is None else len(df))
     except Exception as e:
         log.error("Data fetch error: %s", e)
         log.debug("Traceback:\n%s", traceback.format_exc())
         return 20
 
     if df is None or getattr(df, "empty", False) or len(df) < 5:
-        log.error("No data for %s %s (len=%s). Abort analyze.", symbol, tf, 0 if df is None else len(df))
-        return 21
+        log.warning("No/low data for %s %s (len=%s). Try quick fill via ccxt…", symbol, tf, 0 if df is None else len(df))
+        if _quick_fill_csv(symbol, tf, limit=1200):
+            try:
+                df = get_data(symbol, tf, xlsx_path=xlsx)
+            except Exception as e:
+                log.error("Data fetch error after quick fill: %s", e)
+                return 20
+        if df is None or getattr(df, "empty", False) or len(df) < 5:
+            log.error("No data for %s %s (len=%s). Abort analyze.", symbol, tf, 0 if df is None else len(df))
+            return 21
 
     # --- สร้างข้อความสรุปจาก service (profile-aware)
     cfg = {"profile": profile}
