@@ -85,6 +85,10 @@ services:
         value: baseline
       - key: JOB_BROADCAST
         value: "1"
+      - key: PRICE_PROVIDER         # ✅ เพิ่ม
+        value: binance
+      - key: QUOTE_ASSET            # ✅ เพิ่ม
+        value: USDT
       - key: LINE_CHANNEL_SECRET
         sync: false
       - key: LINE_CHANNEL_ACCESS_TOKEN
