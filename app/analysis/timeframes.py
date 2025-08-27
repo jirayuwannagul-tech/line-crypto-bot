@@ -109,9 +109,22 @@ def _ensure_required_columns(df: pd.DataFrame, where: str) -> pd.DataFrame:
     return df.loc[:, list(REQUIRED_COLUMNS)]
 
 def _parse_and_clean_strict(df: pd.DataFrame) -> pd.DataFrame:
-    ts = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
-    df = df.assign(timestamp=ts).dropna(subset=["timestamp"])
-
+    # robust timestamp parsing with unit detection (s/ms/us/ns)
+    ts_raw = pd.to_numeric(df['timestamp'], errors='coerce')
+    if ts_raw.notna().sum() == 0:
+        # not numeric (e.g., date strings) → let pandas parse
+        ts = pd.to_datetime(df['timestamp'], utc=True, errors='coerce')
+    else:
+        m = float(ts_raw.max())
+        if m < 1e12:       # seconds
+            ts = pd.to_datetime(ts_raw, unit='s',  utc=True, errors='coerce')
+        elif m < 1e14:     # milliseconds
+            ts = pd.to_datetime(ts_raw, unit='ms', utc=True, errors='coerce')
+        elif m < 1e17:     # microseconds
+            ts = pd.to_datetime(ts_raw, unit='us', utc=True, errors='coerce')
+        else:              # nanoseconds
+            ts = pd.to_datetime(ts_raw, unit='ns', utc=True, errors='coerce')
+    df = df.assign(timestamp=ts).dropna(subset=['timestamp'])
     for col in ("open", "high", "low", "close", "volume"):
         df[col] = pd.to_numeric(df[col], errors="coerce")
     df = df.dropna(subset=("open", "high", "low", "close", "volume"))
