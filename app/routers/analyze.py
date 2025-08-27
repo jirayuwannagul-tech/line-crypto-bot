@@ -98,3 +98,11 @@ def analyze_wave_alias(
 ) -> Dict[str, Any]:
     # reuse handler หลัก
     return analyze_endpoint(symbol=symbol, tf=tf, mode=mode, live_limit=live_limit)
+
+@router.get(
+    "/sample",
+    summary="ตัวอย่างผลวิเคราะห์อย่างย่อ (alias เดิม)",
+    description="คืนผลวิเคราะห์ค่าเริ่มต้น symbol=BTCUSDT, tf=1D, mode=text",
+)
+def analyze_sample():
+    return analyze_endpoint(symbol="BTCUSDT", tf="1D", mode="text", live_limit=200)

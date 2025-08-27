@@ -4,7 +4,7 @@ from typing import Optional
 import re
 import pandas as pd
 
-__all__ = ["get_ohlcv_ccxt_safe", "fetch_spot_text"]
+__all__ = ["get_ohlcv_ccxt_safe", "fetch_spot_text", "get_spot_ccxt", "get_spot_text_ccxt"]
 
 # ---- Map TF ----
 _BINANCE_INTERVAL = {
@@ -28,6 +28,17 @@ def _to_binance_symbol(symbol: str) -> str:
     if re.fullmatch(r"[A-Z0-9]{5,}", s):
         return s
     return f"{s}USDT"
+
+def _to_display_pair(symbol: str) -> str:
+    s = (symbol or "").strip().upper()
+    s = s.replace(":", "/").replace("-", "/")
+    if "/" in s:
+        base, quote = [p for p in s.split("/") if p][:2]
+        return f"{base}/{quote}"
+    # ไม่มี '/', เติม /USDT ให้ดูสวยงาม
+    if s.endswith("USDT") and len(s) > 4:
+        return f"{s[:-4]}/USDT"
+    return f"{s}/USDT"
 
 def _interval_to_binance(tf: str) -> str:
     return _BINANCE_INTERVAL.get((tf or "").upper(), "1d")
@@ -93,19 +104,63 @@ def get_ohlcv_ccxt_safe(symbol: str, tf: str, limit: int = 500) -> pd.DataFrame:
         return df2
     return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
 
+# ---- Public: spot price via ccxt (with REST fallback) ----
+def get_spot_ccxt(symbol: str = "BTC/USDT") -> Optional[float]:
+    """
+    คืนราคาล่าสุด (float) จาก Binance ผ่าน ccxt; หาก ccxt ใช้ไม่ได้ ตกลง REST
+    """
+    # 1) ccxt first
+    try:
+        import ccxt  # type: ignore
+        binance = ccxt.binance({"options": {"defaultType": "spot"}})
+        sym = (symbol or "").upper()
+        if "/" not in sym:
+            if sym.endswith("USDT") and len(sym) > 4:
+                sym = f"{sym[:-4]}/USDT"
+            else:
+                sym = f"{sym}/USDT"
+        ticker = binance.fetch_ticker(sym)
+        px = float(ticker.get("last") or ticker.get("close") or ticker.get("info", {}).get("lastPrice"))
+        if px > 0:
+            return px
+    except Exception:
+        pass
+
+    # 2) REST fallback
+    try:
+        import requests
+        sym_rest = _to_binance_symbol(symbol)
+        r = requests.get("https://api.binance.com/api/v3/ticker/price", params={"symbol": sym_rest}, timeout=8)
+        r.raise_for_status()
+        data = r.json()
+        return float(data["price"])
+    except Exception:
+        return None
+
+def get_spot_text_ccxt(symbol: str = "BTC/USDT") -> str:
+    """
+    คืนราคาล่าสุดแบบ string พร้อมหน่วย USDT และคงรูปแบบคู่เป็น BASE/QUOTE
+    """
+    px = get_spot_ccxt(symbol)
+    display = _to_display_pair(symbol)
+    if px is None:
+        return f"{display} price unavailable"
+    return f"{display} last price: {px:,.2f} USDT"
+
 # ---- Public: fetch_spot_text (ใช้โดย chat router เดิม) ----
 def fetch_spot_text(symbol: str) -> str:
     """
     คืนข้อความราคาล่าสุดแบบสั้นสำหรับห้องแชท เช่น:
-    'BTCUSDT last price: 111,234.56 USDT'
+    'BTC/USDT last price: 111,234.56 USDT'
     """
     import requests
-    sym = _to_binance_symbol(symbol)
+    sym_rest = _to_binance_symbol(symbol)
+    display = _to_display_pair(symbol)
     try:
-        r = requests.get("https://api.binance.com/api/v3/ticker/price", params={"symbol": sym}, timeout=8)
+        r = requests.get("https://api.binance.com/api/v3/ticker/price", params={"symbol": sym_rest}, timeout=8)
         r.raise_for_status()
         data = r.json()
         px = float(data["price"])
-        return f"{sym} last price: {px:,.2f} USDT"
+        return f"{display} last price: {px:,.2f} USDT"
     except Exception as e:
-        return f"{sym} price unavailable: {e}"
+        return f"{display} price unavailable: {e}"
