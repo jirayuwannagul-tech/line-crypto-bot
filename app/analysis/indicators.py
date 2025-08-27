@@ -3,7 +3,7 @@
 # Technical Indicators — RULES / FORMULAS ONLY
 # -----------------------------------------------------------------------------
 # เวอร์ชันนี้มีเฉพาะ "การคำนวณ" ของอินดิเคเตอร์มาตรฐาน:
-# EMA, RSI (Wilder), MACD, ADX(+DI/-DI), Stochastic %K/%D, Volume MA & Z-score
+# EMA, RSI (Wilder), MACD, ADX(+DI/-DI), ATR(14), Stochastic %K/%D, Volume MA & Z-score
 # - ไม่มี heuristic / ไม่มีเกณฑ์ตีความ (เช่น buy/sell, overbought/oversold)
 # - ไม่มีเงื่อนไขตัดสินใจอื่น ๆ
 # =============================================================================
@@ -19,6 +19,7 @@ __all__ = [
     "rsi",
     "macd",
     "adx",
+    "atr",
     "stoch_kd",
     "volume_metrics",
     "apply_indicators",
@@ -36,7 +37,7 @@ def ema(series: pd.Series, period: int) -> pd.Series:
 # RSI (Wilder's smoothing)
 # =============================================================================
 def rsi(close: pd.Series, period: int = 14) -> pd.Series:
-    """Relative Strength Index (RSI) ด้วย Wilder smoothing."""
+    """Relative Strength Index (RSI) ด้วย Wilder smoothing (กันหารศูนย์)"""
     close = pd.to_numeric(close, errors="coerce")
     delta = close.diff()
 
@@ -46,9 +47,12 @@ def rsi(close: pd.Series, period: int = 14) -> pd.Series:
     avg_gain = gain.ewm(alpha=1/period, adjust=False, min_periods=period).mean()
     avg_loss = loss.ewm(alpha=1/period, adjust=False, min_periods=period).mean()
 
-    rs = avg_gain / avg_loss.replace(0, np.nan)
+    # ป้องกันหารด้วยศูนย์เมื่อ avg_loss = 0 ในเทรนด์ขึ้นแรง
+    eps = 1e-12
+    rs = avg_gain / (avg_loss + eps)
     rsi_val = 100 - (100 / (1 + rs))
     return rsi_val.clip(0, 100)
+
 
 # =============================================================================
 # MACD
@@ -103,12 +107,36 @@ def adx(
     plus_dm_s = pd.Series(plus_dm).ewm(alpha=1/period, adjust=False).mean()
     minus_dm_s = pd.Series(minus_dm).ewm(alpha=1/period, adjust=False).mean()
 
-    plus_di = 100 * (plus_dm_s / tr_s)
-    minus_di = 100 * (minus_dm_s / tr_s)
+    plus_di = 100 * (plus_dm_s / tr_s.replace(0, np.nan))
+    minus_di = 100 * (minus_dm_s / tr_s.replace(0, np.nan))
     dx = ((plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)) * 100
     adx_val = dx.ewm(alpha=1/period, adjust=False).mean()
 
     return adx_val, plus_di, minus_di
+
+# =============================================================================
+# ATR (Wilder)
+# =============================================================================
+def atr(
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    period: int = 14
+) -> pd.Series:
+    """
+    Average True Range (ATR) — Wilder smoothing
+    """
+    high = pd.to_numeric(high, errors="coerce")
+    low = pd.to_numeric(low, errors="coerce")
+    close = pd.to_numeric(close, errors="coerce")
+
+    prev_close = close.shift(1)
+    tr = pd.concat([
+        (high - low).abs(),
+        (high - prev_close).abs(),
+        (low - prev_close).abs()
+    ], axis=1).max(axis=1)
+    return tr.ewm(alpha=1/period, adjust=False).mean()
 
 # =============================================================================
 # Stochastic %K / %D
@@ -192,6 +220,9 @@ def apply_indicators(
     df["adx14"] = adx_val
     df["plus_di14"] = pdi
     df["minus_di14"] = mdi
+
+    # ATR
+    df["atr14"] = atr(df["high"], df["low"], df["close"], period=int(cfg.get("atr_period", 14)))
 
     # Stochastic
     k_line, d_line = stoch_kd(
