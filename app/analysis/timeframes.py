@@ -8,7 +8,7 @@ import asyncio
 from typing import Literal, Optional, Sequence, List, Tuple, Dict
 
 import pandas as pd
-
+import pathlib 
 # ---- Public API ----
 __all__ = [
     "get_data",
@@ -171,7 +171,11 @@ def _read_excel_strict(
 
 # ---- CSV helpers ----
 def _csv_path(symbol: str, tf: str) -> str:
-    return os.path.join("app", "data", f"{symbol.upper().replace(':','').replace('/','')}_{tf.upper()}.csv")
+    # ใช้ absolute path อ้างอิงโฟลเดอร์ของโมดูลนี้ (กัน CWD เพี้ยนตอนรัน cron)
+    base = pathlib.Path(__file__).resolve().parent  # app/analysis
+    data_dir = (base.parent / "data").resolve()    # app/data
+    fname = f"{symbol.upper().replace(':','').replace('/','')}_{tf.upper()}.csv"
+    return str((data_dir / fname))
 
 def _read_csv_strict(symbol: str, tf: str) -> pd.DataFrame:
     path = _csv_path(symbol, tf)
