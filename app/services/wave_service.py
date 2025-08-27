@@ -1,9 +1,12 @@
+# app/services/wave_service.py
 # -----------------------------------------------------------------------------
 # Orchestrator for wave analysis pipeline.
 # Load data -> compute scenarios (Dow + Elliott + Fibo + Indicators) -> payload.
+# + Elliott RULES + FRACTAL bundle (data-driven) merged in.
 # -----------------------------------------------------------------------------
 from __future__ import annotations
 
+from dataclasses import dataclass, asdict
 from typing import Dict, Optional, Any, List
 import pandas as pd
 import math
@@ -12,15 +15,18 @@ from app.analysis.timeframes import get_data
 # 🔧 logic layer
 from app.logic.scenarios import analyze_scenarios
 from app.logic.elliott_logic import classify_elliott_with_kind
-# �� live data (ccxt/binance) — safe wrapper
+# 🔌 live data (ccxt/binance) — safe wrapper
 from app.adapters.price_provider import get_ohlcv_ccxt_safe
 
+# ✅ data-driven Elliott (rules + fractal)
+from app.analysis.elliott_rules import analyze_elliott_rules_v2
+from app.analysis.elliott_fractal import analyze_elliott_fractal
 
-__all__ = ["analyze_wave", "build_brief_message"]
+__all__ = ["analyze_wave", "build_brief_message", "analyze_df_elliott", "analyze_elliott_bundle", "WaveAnalyzeOptions"]
 
 
 # -----------------------------------------------------------------------------
-# Helpers
+# Helpers (generic)
 # -----------------------------------------------------------------------------
 def _neutral_payload(symbol: str, tf: str, err: Optional[Exception] = None) -> Dict[str, Any]:
     note = f"Data not available: {err}" if err else "Data not available"
@@ -67,7 +73,84 @@ def _to_pair(symbol: str) -> str:
 
 
 # -----------------------------------------------------------------------------
-# Public API
+# Elliott bundle (RULES + FRACTAL) — data-driven layer
+# -----------------------------------------------------------------------------
+@dataclass
+class WaveAnalyzeOptions:
+    schema_path: Optional[str] = None
+    # rules layer
+    pivot_left: Optional[int] = None
+    pivot_right: Optional[int] = None
+    max_swings: Optional[int] = None
+    # fractal layer
+    enable_fractal: bool = True
+    degree: str = "Minute"
+    sub_pivot_left: int = 2
+    sub_pivot_right: int = 2
+
+
+def analyze_elliott_bundle(df: pd.DataFrame, opts: Optional[WaveAnalyzeOptions] = None) -> Dict[str, Any]:
+    """
+    รวมผล RULES + (เลือกได้) FRACTAL เป็นแพ็กเดียวสำหรับใช้ใน LINE bot / engine
+    ไม่ทำ IO ใด ๆ — รับ df พร้อมคอลัมน์ high/low/close เท่านั้น
+    """
+    opts = opts or WaveAnalyzeOptions()
+
+    # 1) RULES
+    rules_res = analyze_elliott_rules_v2(
+        df,
+        schema_path=opts.schema_path,
+        pivot_left=opts.pivot_left,
+        pivot_right=opts.pivot_right,
+        max_swings=opts.max_swings,
+    )
+
+    # 2) FRACTAL (ต่อยอดจากหน้าต่างเดียวกัน)
+    if opts.enable_fractal:
+        fractal_res = analyze_elliott_fractal(
+            df,
+            schema_path=opts.schema_path,
+            degree=opts.degree,
+            sub_pivot_left=opts.sub_pivot_left,
+            sub_pivot_right=opts.sub_pivot_right,
+        )
+    else:
+        fractal_res = {**rules_res, "fractal": {"checked": False, "reason": "disabled"}}
+
+    # 3) รวมผล: เลือกฟิลด์สำคัญ + แนบดีบั๊ก
+    bundle: Dict[str, Any] = {
+        "pattern": fractal_res.get("pattern", rules_res.get("pattern", "UNKNOWN")),
+        "variant": fractal_res.get("variant", rules_res.get("variant", "")),
+        "wave_label": fractal_res.get("wave_label", rules_res.get("wave_label", "UNKNOWN")),
+        "rules": rules_res.get("rules", []),
+        "fractal": fractal_res.get("fractal", {"checked": False}),
+        "degree": fractal_res.get("degree", opts.degree),
+        "targets": rules_res.get("targets", {}),  # RULES layer ยังไม่ตั้งเป้า → เว้นว่างไว้
+        "completed": bool(rules_res.get("completed", False) and fractal_res.get("fractal", {}).get("passed_all_subwaves", False)),
+        "debug": {
+            "rules_debug": rules_res.get("debug", {}),
+            "fractal_debug": fractal_res.get("debug", {}),
+        },
+        "meta": {
+            "options": asdict(opts),
+            "schema_used": opts.schema_path or "default",
+        },
+    }
+    return bundle
+
+
+def analyze_df_elliott(df: pd.DataFrame, **kwargs) -> Dict[str, Any]:
+    """
+    proxy แบบ keyword-friendly:
+    analyze_df_elliott(df, enable_fractal=True, degree="Minute",
+                       sub_pivot_left=2, sub_pivot_right=2, ...)
+    """
+    opts = WaveAnalyzeOptions(**kwargs)
+    return analyze_elliott_bundle(df, opts)
+
+
+# -----------------------------------------------------------------------------
+# Public API (orchestrator)
 # -----------------------------------------------------------------------------
 def analyze_wave(
     symbol: str,
@@ -81,6 +164,7 @@ def analyze_wave(
       - หาก cfg['use_live'] เป็น True: โหลด OHLCV จาก Binance (ผ่าน price_provider)
       - ไม่เช่นนั้น: โหลดจาก Excel/CSV (ผ่าน timeframes.get_data)
       - Run scenarios (+ optional Weekly context)
+      - แนบ Elliott (RULES + FRACTAL bundle)
       - แนบ TP/SL (3%,5%,7% / SL 3%) และ metadata พื้นฐาน
     """
     cfg = cfg or {}
@@ -104,7 +188,7 @@ def analyze_wave(
     base_cfg: Dict[str, Any] = {"elliott": {"allow_diagonal": True}}
     merged_cfg: Dict[str, Any] = _merge_dict(base_cfg, cfg or {})
 
-    # 3) Weekly context (1W) — best effort
+    # 3) Weekly context (1W) — best effort (ใช้ logic เดิม เพื่อความเข้ากันได้ย้อนหลัง)
     weekly_ctx: Optional[Dict[str, Any]] = None
     try:
         if cfg.get("use_live"):
@@ -121,6 +205,37 @@ def analyze_wave(
         payload = analyze_scenarios(df, symbol=symbol, tf=tf, cfg=merged_cfg, weekly_ctx=weekly_ctx)
     except TypeError:
         payload = analyze_scenarios(df, symbol=symbol, tf=tf, cfg=merged_cfg)
+
+    # 4.1) แนบ Elliott (RULES + FRACTAL bundle) ลง levels.elliott เพื่อ surface ใน LINE/รายงาน
+    try:
+        ell_opts = (merged_cfg.get("elliott_opts") or {})  # ผู้ใช้สามารถส่ง override ได้ใน cfg
+        ell_res = analyze_df_elliott(
+            df,
+            **{
+                "schema_path": ell_opts.get("schema_path"),
+                "pivot_left": ell_opts.get("pivot_left"),
+                "pivot_right": ell_opts.get("pivot_right"),
+                "max_swings": ell_opts.get("max_swings"),
+                "enable_fractal": ell_opts.get("enable_fractal", True),
+                "degree": ell_opts.get("degree", "Minute"),
+                "sub_pivot_left": ell_opts.get("sub_pivot_left", 2),
+                "sub_pivot_right": ell_opts.get("sub_pivot_right", 2),
+            },
+        )
+        levels = payload.setdefault("levels", {})
+        levels["elliott"] = {
+            "pattern": ell_res.get("pattern", "UNKNOWN"),
+            "variant": ell_res.get("variant", ""),
+            "wave_label": ell_res.get("wave_label", "UNKNOWN"),
+            "rules": ell_res.get("rules", []),
+            "fractal": ell_res.get("fractal", {}),
+            "degree": ell_res.get("degree"),
+            "completed": ell_res.get("completed", False),
+            "debug": ell_res.get("debug", {}),
+        }
+    except Exception as _e:
+        # ไม่ให้ pipeline ล้ม — แค่แนบเหตุไว้ใน rationale
+        payload.setdefault("rationale", []).append(f"Elliott (bundle) failed: {_e!s}")
 
     # 5) Attach last price/time (surface สำหรับ LINE text)
     last = df.iloc[-1]
@@ -199,11 +314,6 @@ def build_brief_message(payload: Dict[str, Any]) -> str:
             wb_for_plan = wb.upper()
     except Exception:
         pass
-
-    def _fmt_num(v: Optional[float]) -> Optional[str]:
-        if isinstance(v, (int, float)) and not math.isnan(v):
-            return f"{v:,.2f}"
-        return None
 
     lines: List[str] = []
     header = f"{sym} ({tf}){weekly_line}"

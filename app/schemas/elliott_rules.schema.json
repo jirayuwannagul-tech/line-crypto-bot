@@ -1,0 +1,229 @@
+{
+  "schema_name": "elliott_rules",
+  "version": "1.0.0",
+  "updated_at": "2025-08-27",
+  "language": "th",
+
+  "layers": ["tolerances", "detection", "fibonacci", "fractal_hierarchy", "geometry", "patterns", "output", "diagnostics"],
+
+  "tolerances": {
+    "ratio_tolerance_pct": 0.15,
+    "price_epsilon": 1e-08,
+    "overlap_allowance_ticks": 0,
+    "min_swing_points": 5,
+    "min_triangle_legs": 5,
+    "min_diagonal_legs": 5,
+    "min_impulse_legs": 6,
+    "min_abc_legs": 4
+  },
+
+  "detection": {
+    "pivots": { "left": 2, "right": 2 },
+    "max_swings": 30,
+    "alt_hl_sequences": [
+      ["L","H","L","H","L","H"],
+      ["H","L","H","L","H","L"]
+    ],
+    "abc_sequences": [
+      ["H","L","H","L"],
+      ["L","H","L","H"]
+    ],
+    "triangle_sequences": [
+      ["H","L","H","L","H"],
+      ["L","H","L","H","L"]
+    ]
+  },
+
+  "fibonacci": {
+    "retracement_levels": [0.236, 0.382, 0.5, 0.618, 0.786],
+    "extension_levels": [1.0, 1.272, 1.414, 1.618, 2.0, 2.618, 4.236],
+    "default_windows": {
+      "wave2_retrace_of_1": [0.5, 0.618],
+      "wave4_retrace_of_3": [0.236, 0.382],
+      "zigzag_B_of_A": [0.382, 0.618],
+      "flat_B_of_A": [0.9, 1.1],
+      "diagonal2_retrace_of_1": [0.5, 0.786],
+      "C_vs_A_regular": [0.9, 1.1],
+      "C_vs_A_expanded": [1.272, 1.618]
+    }
+  },
+
+  "fractal_hierarchy": {
+    "degrees": ["Primary", "Intermediate", "Minor", "Minute", "Minuette", "Subminuette"],
+    "subwave_structures": {
+      "IMPULSE": ["5","3","5","3","5"],
+      "DIAGONAL": ["3|5","3","3|5","3","3|5"],
+      "ZIGZAG": ["5","3","5"],
+      "FLAT": ["3","3","5"],
+      "TRIANGLE": ["3","3","3","3","3"]
+    }
+  },
+
+  "geometry": {
+    "diagonal": {
+      "require_wedge": true,
+      "allow_overlap_1_4": true,
+      "slope_ratio_min_abs": 0.05,
+      "converging_required_for_contracting": true,
+      "ending_subwaves_prefer_3s": true,
+      "throw_over_expected": true
+    },
+    "triangle": {
+      "modes": ["CONTRACTING","EXPANDING","ASCENDING","DESCENDING","BARRIER","RUNNING"],
+      "require_5_legs": true,
+      "each_leg_is_3": true,
+      "contracting_require_shrinking_range": true,
+      "expanding_require_widening_range": true,
+      "E_often_ends_before_full_touch": true,
+      "thrust_target_equals_H": true
+    },
+    "impulse": {
+      "no_overlap_1_4": true,
+      "wave3_not_shortest": true
+    }
+  },
+
+  "patterns": {
+    "IMPULSE": {
+      "label": "Wave 1-5",
+      "variants": ["NORMAL","EXTENDED","TRUNCATED"],
+      "rules": [
+        {"name": "no_wave2_beyond_wave1_start", "type": "hard"},
+        {"name": "wave3_not_shortest_vs_1_3_5", "type": "hard"},
+        {"name": "no_wave1_4_overlap", "type": "hard"}
+      ],
+      "subwaves": ["1","2","3","4","5"],
+      "fib": {
+        "wave2_retrace_of_1": {"range_ref": "wave2_retrace_of_1"},
+        "wave3_projection_of_1": {"targets": [1.618, 2.618, 4.236]},
+        "wave4_retrace_of_3": {"range_ref": "wave4_retrace_of_3"},
+        "wave5_projection_methods": ["=wave1_from_wave4","0.618_of_0to3_from_wave4"]
+      },
+      "invalidation": [
+        "wave2_below_wave1_start_in_uptrend",
+        "wave4_overlaps_wave1_territory",
+        "wave3_is_shortest_of_1_3_5"
+      ]
+    },
+
+    "DIAGONAL": {
+      "label": "Wave 1/5 (Diagonal)",
+      "variants": ["LEADING","ENDING"],
+      "rules": [
+        {"name": "allow_wave1_4_overlap", "type": "hard"},
+        {"name": "wave2_not_beyond_wave1_start", "type": "hard"},
+        {"name": "wave3_not_shortest_vs_1_3_5", "type": "hard"},
+        {"name": "wedge_geometry_valid", "type": "hard"},
+        {"name": "ending_diagonal_subwaves_prefer_3s", "type": "guideline"}
+      ],
+      "subwaves": ["1","2","3","4","5"],
+      "fib": {
+        "wave2_retrace_of_1": {"range_ref": "diagonal2_retrace_of_1"},
+        "wave5_projection_methods": ["=wave1_from_wave4","0.618_of_0to3_from_wave4"]
+      },
+      "invalidation": [
+        "no_wedge_convergence_or_expansion",
+        "leading_diagonal_subwaves_invalid_structure"
+      ]
+    },
+
+    "ZIGZAG": {
+      "label": "Wave A-B-C (Zigzag)",
+      "variants": ["NORMAL","DOUBLE","TRIPLE","RUNNING"],
+      "rules": [
+        {"name": "A_is_motive_5", "type": "hard"},
+        {"name": "B_is_3_retrace_shallow", "type": "hard", "range_ref": "zigzag_B_of_A"},
+        {"name": "C_is_motive_5_same_dir_as_A", "type": "hard"},
+        {"name": "C_len_vs_A_targets", "type": "guideline", "targets": ["~1.0","~1.618"]}
+      ],
+      "subwaves": ["A","B","C"],
+      "combination": {
+        "DOUBLE": {"form": "W-X-Y", "X_is_3": true},
+        "TRIPLE": {"form": "W-X-Y-X-Z", "X_is_3": true}
+      },
+      "invalidation": [
+        "B_retrace_ge_0.9_of_A_implies_not_zigzag"
+      ]
+    },
+
+    "FLAT": {
+      "label": "Wave A-B-C (Flat)",
+      "variants": ["REGULAR","EXPANDED","RUNNING"],
+      "rules": [
+        {"name": "A_is_3", "type": "hard"},
+        {"name": "B_is_3_deep", "type": "hard", "range_ref": "flat_B_of_A"},
+        {"name": "C_is_motive_5_same_dir_as_A", "type": "hard"}
+      ],
+      "subwaves": ["A","B","C"],
+      "fib": {
+        "C_vs_A_regular": {"range_ref": "C_vs_A_regular"},
+        "C_vs_A_expanded": {"range_ref": "C_vs_A_expanded"}
+      },
+      "variant_conditions": {
+        "EXPANDED": {"B_exceeds_A_start": true},
+        "RUNNING": {"B_exceeds_A_start": true, "C_shorter_than_A": true}
+      },
+      "invalidation": [
+        "C_not_countable_as_5",
+        "B_not_deep_enough_for_flat"
+      ]
+    },
+
+    "TRIANGLE": {
+      "label": "Wave A-B-C-D-E",
+      "variants": ["CONTRACTING","EXPANDING","ASCENDING","DESCENDING","BARRIER","RUNNING"],
+      "rules": [
+        {"name": "five_legs_A_to_E", "type": "hard"},
+        {"name": "each_leg_is_3", "type": "hard"},
+        {"name": "geometry_contracting_or_expanding", "type": "guideline"},
+        {"name": "E_ends_before_full_touch_throw_over_ok", "type": "guideline"}
+      ],
+      "subwaves": ["A","B","C","D","E"],
+      "targets": {
+        "thrust_equals_H_from_breakout": true
+      },
+      "invalidation": [
+        "any_leg_counts_as_5",
+        "breakout_before_A_to_E_complete"
+      ]
+    },
+
+    "COMBINATION": {
+      "label": "W-X-Y(-X-Z)",
+      "variants": ["DOUBLE_THREE","TRIPLE_THREE"],
+      "rules": [
+        {"name": "W_Y_Z_are_corrective_patterns", "type": "hard"},
+        {"name": "X_is_3_connector", "type": "hard"},
+        {"name": "max_two_X_connectors", "type": "hard"}
+      ],
+      "subwaves": ["W","X","Y","X2","Z"],
+      "heuristics": {
+        "time_consuming_sideways": true,
+        "atr_declines_gradually": true,
+        "rsi_oscillates_near_50": true
+      },
+      "invalidation": [
+        "impulse_detected_inside_W_Y_Z",
+        "more_than_two_X_connectors"
+      ]
+    }
+  },
+
+  "output": {
+    "report_fields": ["pattern","variant","wave_label","rules","fib","geometry","degree","invalidation_levels","debug"],
+    "wave_labels": {
+      "IMPULSE": "Wave 1-5",
+      "DIAGONAL": "Wave 1/5 (Diagonal)",
+      "ZIGZAG": "Wave A-B-C (Zigzag)",
+      "FLAT": "Wave A-B-C (Flat)",
+      "TRIANGLE": "Wave A-B-C-D-E",
+      "COMBINATION": "W-X-Y(-X-Z)"
+    }
+  },
+
+  "diagnostics": {
+    "debug_swings_tail": 12,
+    "emit_window_indices": true,
+    "emit_types_prices": true
+  }
+}
