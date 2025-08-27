@@ -9,7 +9,7 @@
 # ENV ที่เกี่ยวข้อง:
 #   LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET, LINE_DEFAULT_TO
 #   JOB_SYMBOL            (default: BTCUSDT)
-#   JOB_TF                (default: 1H)          # <- แก้จาก 1D เป็น 1H
+#   JOB_TF                (default: 1H)
 #   STRATEGY_PROFILE      (default: baseline)
 #   HISTORICAL_XLSX_PATH  (optional override)
 #   JOB_BROADCAST         (set "1" เพื่อ broadcast แทน push)
@@ -27,6 +27,7 @@ import traceback
 
 from app.services.signal_service import analyze_and_get_text
 from app.adapters.delivery_line import LineDelivery
+from app.analysis.timeframes import get_data  # ✅ เพิ่ม: ใช้เช็กข้อมูลก่อนวิเคราะห์
 
 log = logging.getLogger("jobs.push_btc_hourly")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -50,10 +51,22 @@ def _get_bool_env(name: str, default: bool = False) -> bool:
 def main() -> int:
     # --- config จาก ENV (มีค่า default ที่ปลอดภัย)
     symbol  = _env("JOB_SYMBOL", "BTCUSDT")
-    tf      = _env("JOB_TF", "1H")  # <- default เป็น 1H (รายชั่วโมง)
+    tf      = _env("JOB_TF", "1H")
     profile = _env("STRATEGY_PROFILE", "baseline")
     xlsx    = _env("HISTORICAL_XLSX_PATH", None)
     do_broadcast = _get_bool_env("JOB_BROADCAST", False)
+
+    # --- เช็กข้อมูลก่อน (กัน DataFrame ว่าง → IndexError)
+    try:
+        df = get_data(symbol, tf, xlsx_path=xlsx)  # อนุญาตให้ provider ภายในตัดสินใจว่าจะใช้ API/CSV/Excel
+    except Exception as e:
+        log.error("Data fetch error: %s", e)
+        log.debug("Traceback:\n%s", traceback.format_exc())
+        return 20
+
+    if df is None or getattr(df, "empty", False) or len(df) < 5:
+        log.error("No data for %s %s (len=%s). Abort analyze.", symbol, tf, 0 if df is None else len(df))
+        return 21
 
     # --- สร้างข้อความสรุปจาก service (profile-aware)
     cfg = {"profile": profile}
@@ -70,12 +83,13 @@ def main() -> int:
         log.error("Empty analysis text; abort sending.")
         return 11
 
-    # --- สร้าง LINE client
+    # --- ตรวจ credentials สำหรับ LINE
     access = _env("LINE_CHANNEL_ACCESS_TOKEN")
     secret = _env("LINE_CHANNEL_SECRET")
     if not access or not secret:
         log.error("Missing LINE credentials (LINE_CHANNEL_ACCESS_TOKEN / LINE_CHANNEL_SECRET)")
         return 2
+
     client = LineDelivery(access, secret)
 
     # --- ส่งข้อความ
