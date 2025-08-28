@@ -3,13 +3,14 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from app.utils.logging_tools import setup_logging if False else None  # ถ้ามีฟังก์ชันตั้งค่า log อยู่แล้ว ให้แก้ตามโปรเจกต์
 from app.services.news_service import build_news_message
 from app.services.notifier_line import get_notifier
 
 logger = logging.getLogger(__name__)
 
 def main():
-    # setup logging แบบง่าย
+    # setup logging แบบง่าย ถ้าโปรเจกต์มี setup_logging ให้เรียกแทนได้
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s"
