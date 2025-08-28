@@ -4,7 +4,7 @@
 # -----------------------------------------------------------------------------
 # - รับ Webhook จาก LINE Messaging API
 # - รองรับ keyword reply, ราคา <symbol>, พิมพ์สัญลักษณ์เหรียญตรง ๆ (BTC/ETH/...)
-# - เก็บ userId ล่าสุด และมีเอ็นด์พอยต์ /debug/push_news สำหรับทดสอบ push
+# - เก็บ userId ล่าสุด และมีเอ็นด์พอยต์ /debug/* สำหรับทดสอบ push
 # - background loop แจ้งข่าว mock ทุก NEWS_PUSH_EVERY_SEC วินาที (ค่า env)
 # =============================================================================
 
@@ -29,6 +29,8 @@ log = logging.getLogger(__name__)
 
 # เก็บ userId ล่าสุดไว้สำหรับ push ทดสอบ
 _last_user_id: Optional[str] = None
+# fallback จาก .env (เช่น LINE_USER_ID=Uxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)
+_ENV_USER_ID = os.getenv("LINE_USER_ID", "").strip()
 
 # interval สำหรับ push ข่าว mock (วินาที)
 _NEWS_INTERVAL = int(os.getenv("NEWS_PUSH_EVERY_SEC", "0"))
@@ -81,10 +83,11 @@ async def _news_loop():
     while True:
         try:
             await asyncio.sleep(_NEWS_INTERVAL)
-            if _last_user_id:
+            uid = _last_user_id or _ENV_USER_ID
+            if uid:
                 now = _dt.datetime.now().strftime("%H:%M:%S")
                 text = f"📰 ข่าวทดสอบ {now} — ระบบแจ้งเตือนทำงานจริง"
-                await _push_text(_last_user_id, text)
+                await _push_text(uid, text)
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -199,16 +202,35 @@ async def line_webhook(request: Request) -> Dict[str, Any]:
     return {"ok": True}
 
 # =============================================================================
-# DEBUG: push news
+# DEBUG endpoints
 # =============================================================================
+@router.get("/debug/whoami")
+async def debug_whoami() -> Dict[str, Any]:
+    return {
+        "last_user_id": _last_user_id,
+        "env_user_id": _ENV_USER_ID,
+        "using": "last" if _last_user_id else ("env" if _ENV_USER_ID else None),
+    }
+
+@router.post("/debug/set_user")
+async def debug_set_user(request: Request) -> Dict[str, Any]:
+    global _last_user_id
+    body = await request.json()
+    user_id = (body or {}).get("user_id", "").strip()
+    if not user_id:
+        raise HTTPException(status_code=400, detail="ต้องระบุ user_id")
+    _last_user_id = user_id
+    return {"ok": True, "last_user_id": _last_user_id}
+
 @router.post("/debug/push_news")
 async def debug_push_news(request: Request) -> Dict[str, Any]:
     body = await request.json()
     text = (body or {}).get("text", "📰 ข่าวทดสอบ: ระบบ push พร้อมใช้งาน")
-    if not _last_user_id:
-        raise HTTPException(status_code=400, detail="ยังไม่พบ userId — กรุณาส่งข้อความหาบอทก่อน")
-    await _push_text(_last_user_id, text)
-    return {"ok": True, "pushed_to": _last_user_id}
+    uid = _last_user_id or _ENV_USER_ID
+    if not uid:
+        raise HTTPException(status_code=400, detail="ยังไม่พบ userId — ส่งข้อความหาบอทก่อน หรือกำหนด LINE_USER_ID ใน .env")
+    await _push_text(uid, text)
+    return {"ok": True, "pushed_to": uid, "source": "last" if _last_user_id else "env"}
 
 # =============================================================================
 # Backward-compat shim for tests: provide line_bot_api with reply_message()

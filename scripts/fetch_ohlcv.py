@@ -86,7 +86,7 @@ def fetch_all_ohlcv(exchange, symbol: str, timeframe_ccxt: str, since_ms: int, u
         return pd.DataFrame(columns=["timestamp","open","high","low","close","volume"])
 
     df = pd.DataFrame(all_rows, columns=["timestamp","open","high","low","close","volume"])
-    df = df.drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop_index=True)
+    df = df.drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
 
     # แปลง timestamp เป็น Asia/Bangkok แล้วถอด tz ออก (ให้เข้ากับไฟล์เดิม)
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert("Asia/Bangkok").dt.tz_localize(None)

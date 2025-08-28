@@ -49,6 +49,7 @@ def create_app() -> FastAPI:
         openapi_url="/openapi.json",
         lifespan=lifespan,
     )
+    # รวม router ต่าง ๆ
     app.include_router(health_router)
     app.include_router(chat_router)
     app.include_router(line_router, prefix="/line")
@@ -68,6 +69,7 @@ def index():
             "/docs",
             "/chat (POST)",
             "/line/webhook (POST)",
+            "/line/debug/push_news (POST)",
             "/analyze/sample",
         ],
     }

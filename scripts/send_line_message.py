@@ -1,37 +1,36 @@
-# ส่งข้อความไปที่ LINE (push message)
-# ใช้ LINE Messaging API v3
-# ENV ต้องมี: LINE_CHANNEL_ACCESS_TOKEN, LINE_TO
-# ใช้: python scripts/send_line_message.py --text "ข้อความ"
-# หรือ: python scripts/send_line_message.py --to <USER_ID> --text "ข้อความ"
+#!/usr/bin/env python3
+from __future__ import annotations
 
 import os
 import argparse
-from dotenv import load_dotenv
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, PushMessageRequest, TextMessage
+import sys
+import httpx
 
-# โหลดค่า ENV
-load_dotenv()
-
-def push_text(to: str, text: str):
+def push_text(user_id: str, text: str) -> None:
     token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
     if not token:
-        raise RuntimeError("❌ ENV LINE_CHANNEL_ACCESS_TOKEN ว่าง")
+        print("ERROR: LINE_CHANNEL_ACCESS_TOKEN is missing", file=sys.stderr)
+        sys.exit(1)
 
-    config = Configuration(access_token=token)
-    with ApiClient(config) as api_client:
-        api = MessagingApi(api_client)
-        req = PushMessageRequest(to=to, messages=[TextMessage(text=text)])
-        api.push_message(req)
+    url = "https://api.line.me/v2/bot/message/push"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    payload = {"to": user_id, "messages": [{"type": "text", "text": text[:5000]}]}
+
+    with httpx.Client(timeout=10) as client:
+        r = client.post(url, headers=headers, json=payload)
+        try:
+            r.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            print(f"ERROR: LINE push failed: {e.response.text}", file=sys.stderr)
+            sys.exit(2)
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--to", required=True, help="LINE userId")
+    ap.add_argument("--text", required=True, help="message text")
+    args = ap.parse_args()
+    push_text(args.to, args.text)
+    print("OK: pushed")
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser()
-    p.add_argument("--to", default=os.getenv("LINE_TO"), help="LINE UserId/GroupId/RoomId")
-    p.add_argument("--text", required=True, help="ข้อความที่จะส่ง")
-    args = p.parse_args()
-
-    if not args.to:
-        raise RuntimeError("❌ ต้องใส่ --to หรือกำหนด ENV LINE_TO ใน .env")
-
-    print(f"[DEBUG] to={args.to}")
-    push_text(args.to, args.text)
-    print("✅ sent")
+    main()
