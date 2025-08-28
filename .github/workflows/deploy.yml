@@ -1,0 +1,70 @@
+name: Deploy
+
+on:
+  workflow_dispatch: {}
+  push:
+    tags:
+      - 'v*.*.*'
+    branches:
+      - main
+    paths:
+      - 'app/**'
+      - 'infra/**'
+      - '!**/*.md'
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.ref, 'refs/tags/v') ||                                     
+      (startsWith(github.ref, 'refs/heads/main') && github.event.forced == false)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check changed paths (monorepo filter)
+        id: diff
+        run: |
+          set -e
+          BASE="$(git merge-base HEAD^ HEAD || echo HEAD^)"
+          CHANGED=$(git diff --name-only "$BASE" HEAD | tr '\n' ' ')
+          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
+          case "$CHANGED" in
+            *app/*|*infra/*) echo "run_deploy=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "run_deploy=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Setup Python
+        if: steps.diff.outputs.run_deploy == 'true' || startsWith(github.ref, 'refs/tags/v')
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        if: steps.diff.outputs.run_deploy == 'true' || startsWith(github.ref, 'refs/tags/v')
+        run: |
+          pip install -U pip
+          pip install -r requirements.txt
+
+      - name: Build
+        if: steps.diff.outputs.run_deploy == 'true' || startsWith(github.ref, 'refs/tags/v')
+        run: |
+          echo "🛠️ build steps here"
+
+      - name: Deploy
+        if: steps.diff.outputs.run_deploy == 'true' || startsWith(github.ref, 'refs/tags/v')
+        env:
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+        run: |
+          echo "🚀 deploy steps here"
