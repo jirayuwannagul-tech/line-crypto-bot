@@ -41,9 +41,11 @@ async def _reply_text(reply_token: str, text: str) -> None:
     token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
     if not token:
         raise HTTPException(status_code=400, detail="LINE_CHANNEL_ACCESS_TOKEN is missing")
+
     url = "https://api.line.me/v2/bot/message/reply"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     payload = {"replyToken": reply_token, "messages": [{"type": "text", "text": text[:5000]}]}
+
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(url, headers=headers, json=payload)
         try:
@@ -58,9 +60,11 @@ async def _push_text(user_id: str, text: str) -> None:
     token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
     if not token:
         raise HTTPException(status_code=400, detail="LINE_CHANNEL_ACCESS_TOKEN is missing")
+
     url = "https://api.line.me/v2/bot/message/push"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     payload = {"to": user_id, "messages": [{"type": "text", "text": text[:5000]}]}
+
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(url, headers=headers, json=payload)
         try:
@@ -141,6 +145,7 @@ async def line_webhook(request: Request) -> Dict[str, Any]:
         body = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
+
     events = (body or {}).get("events", [])
     if not events:
         return {"ok": True}
@@ -204,17 +209,3 @@ async def debug_push_news(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="ยังไม่พบ userId — กรุณาส่งข้อความหาบอทก่อน")
     await _push_text(_last_user_id, text)
     return {"ok": True, "pushed_to": _last_user_id}
-
-# =============================================================================
-# LINE BOT API fallback
-# =============================================================================
-try:
-    from linebot import LineBotApi
-    LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
-    line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
-except Exception:
-    class _LineAPINoop:
-        def push_message(self, *a, **k): pass
-        def reply_message(self, *a, **k): pass
-        def broadcast(self, *a, **k): pass
-    line_bot_api = _LineAPINoop()
