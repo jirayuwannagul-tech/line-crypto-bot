@@ -2,9 +2,10 @@
 # NOTE: แทนที่ทั้งไฟล์นี้
 from __future__ import annotations
 
-from typing import Union, Dict, Any, Iterable, Tuple
+from typing import Union, Dict, Any, Iterable
 import numpy as np
 import pandas as pd
+
 
 __all__ = [
     "trend_filter",
@@ -12,9 +13,8 @@ __all__ = [
     "volume_filter",
     "is_sideway_df",
     "side_confidence",
-    "filter_stack",
-    "mtf_filter_stack"
 ]
+
 
 # ----------------------------- helpers ----------------------------- #
 def _series_to_df(series: Union[pd.DataFrame, Dict[str, Any], Iterable[Dict[str, Any]]]) -> pd.DataFrame:
@@ -69,8 +69,10 @@ def _series_to_df(series: Union[pd.DataFrame, Dict[str, Any], Iterable[Dict[str,
 
     return df
 
+
 def _ema(s: pd.Series, span: int) -> pd.Series:
     return s.ewm(span=span, adjust=False, min_periods=max(2, span // 2)).mean()
+
 
 def _slope(s: pd.Series, window: int = 5) -> float:
     """ประมาณความชันเชิงเส้น (normalized) ช่วงท้ายของ series"""
@@ -87,6 +89,7 @@ def _slope(s: pd.Series, window: int = 5) -> float:
     m = np.sum((x - x_mean) * (y - y_mean)) / denom
     # normalize ด้วยราคาเฉลี่ยเพื่อลด scale effect
     return float(m / max(1e-9, y_mean))
+
 
 # ----------------------------- core filters ----------------------------- #
 def trend_filter(
@@ -112,6 +115,7 @@ def trend_filter(
 
     return bool(up_trend or down_trend)
 
+
 def volatility_filter(
     series: Union[pd.DataFrame, Dict[str, Any], Iterable[Dict[str, Any]]],
     min_atr_pct: float = 0.002,
@@ -135,6 +139,7 @@ def volatility_filter(
         return False
     return bool(atr_pct >= min_atr_pct)
 
+
 def volume_filter(
     series: Union[pd.DataFrame, Dict[str, Any], Iterable[Dict[str, Any]]],
     min_multiple_of_avg: float = 1.0
@@ -151,6 +156,7 @@ def volume_filter(
     if pd.isna(last) or pd.isna(avg):
         return False
     return bool(last > avg * float(min_multiple_of_avg))
+
 
 def is_sideway_df(
     df: pd.DataFrame,
@@ -176,6 +182,7 @@ def is_sideway_df(
     # จัด index ให้ตรงและยาวเท่ากัน
     mask = mask.reindex(index=df.index, fill_value=False)
     return mask
+
 
 def side_confidence(
     series_or_df: Union[pd.DataFrame, Dict[str, Any], Iterable[Dict[str, Any]]],
@@ -205,6 +212,7 @@ def side_confidence(
     x = float((vol_ratio - lo) / (hi - lo))
     x = max(0.0, min(1.0, x))
     return float(1.0 - x)
+from __future__ import annotations
 from typing import Dict, Any, Tuple
 import pandas as pd
 
