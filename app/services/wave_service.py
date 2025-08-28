@@ -388,3 +388,35 @@ def build_brief_message(payload: Dict[str, Any]) -> str:
         pass
 
     return "\n".join(lines)
+
+# [ไฟล์] app/services/wave_service.py (เพิ่มฟังก์ชันใหม่ท้ายไฟล์)
+
+import json
+
+# [ไฟล์] app/services/wave_service.py  (เพิ่มฟังก์ชัน/อัปเดตให้รวม 1D)
+# วางต่อท้ายไฟล์ (หรือแทนที่ฟังก์ชัน build_brief_message เดิม)
+
+def build_brief_message(result: dict) -> str:
+    """แปลง scenario JSON -> ข้อความสั้นส่ง LINE (รวม 1H/4H/1D)"""
+    sym = result.get("symbol", "?")
+    sc = result.get("scenario", {})
+    last1 = result.get("last_1H", {})
+    last4 = result.get("last_4H", {})
+    lastD = result.get("last_1D", {})
+    reasons = sc.get("reasons", [])
+
+    def pct(x): return f"{x:.1f}%" if isinstance(x, (int, float)) else "?"
+    def fmt_num(x, nd=2): 
+        try: return f"{float(x):.{nd}f}"
+        except: return "?"
+
+    msg = (
+        f"[{sym}] Scenario\n"
+        f"UP {pct(sc.get('UP_pct'))} | DOWN {pct(sc.get('DOWN_pct'))} | SIDE {pct(sc.get('SIDE_pct'))}\n"
+        f"1H Close {fmt_num(last1.get('close'))} | RSI {fmt_num(last1.get('rsi14'),1)}\n"
+        f"4H Close {fmt_num(last4.get('close'))} | RSI {fmt_num(last4.get('rsi14'),1)}\n"
+        f"1D Close {fmt_num(lastD.get('close'))} | RSI {fmt_num(lastD.get('rsi14'),1)}\n"
+    )
+    if reasons:
+        msg += "Reasons: " + "; ".join(reasons[:4])
+    return msg
