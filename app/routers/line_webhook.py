@@ -209,3 +209,17 @@ async def debug_push_news(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="ยังไม่พบ userId — กรุณาส่งข้อความหาบอทก่อน")
     await _push_text(_last_user_id, text)
     return {"ok": True, "pushed_to": _last_user_id}
+
+# =============================================================================
+# Backward-compat shim for tests: provide line_bot_api with reply_message()
+# =============================================================================
+class _LineAPINoop:
+    def reply_message(self, *args, **kwargs):
+        return None
+    def push_message(self, *args, **kwargs):
+        return None
+    def broadcast(self, *args, **kwargs):
+        return None
+
+# ให้ tests สามารถ monkeypatch ได้: tests จะทำ monkeypatch.setattr(lw, "line_bot_api", ...)
+line_bot_api = _LineAPINoop()
