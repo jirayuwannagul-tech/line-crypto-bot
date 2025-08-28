@@ -10,9 +10,9 @@ services:
       - key: PYTHONPATH
         value: "."
       - key: LINE_CHANNEL_ACCESS_TOKEN
-        sync: false   # ใส่ค่าใน Dashboard
+        sync: false   # กำหนดใน Dashboard
       - key: LINE_USER_ID
-        sync: false   # ใส่ค่าใน Dashboard (ถ้า web ต้องใช้)
+        sync: false   # กำหนดใน Dashboard
 
   # --- Worker: Intraday scanner 24/7 ---
   - type: worker
@@ -29,12 +29,11 @@ services:
       - key: LINE_USER_ID
         sync: false
       - key: MTA_SYMBOLS
-        value: "BTCUSDT"   # เพิ่ม ETHUSDT,SOLUSDT ได้ภายหลัง
+        value: "BTCUSDT"   # หรือหลายตัว เช่น BTCUSDT,ETHUSDT
 
-# --- Cron jobs (นอก services) ---
 cronJobs:
   - name: push-news-8am-ict
-    schedule: "0 1 * * *"   # 01:00 UTC = 08:00 Asia/Bangkok
+    schedule: "0 1 * * *"   # 01:00 UTC = 08:00 ICT
     command: python jobs/push_news.py --max-items 6 --limit-per-source 3
     envVars:
       - key: LINE_CHANNEL_ACCESS_TOKEN
@@ -44,5 +43,4 @@ cronJobs:
 
   - name: keepalive
     schedule: "*/5 * * * *"
-    # แก้ URL ให้ตรงกับชื่อ web service ของคุณ
     command: curl -m 5 -sS https://line-crypto-hourly-news.onrender.com/health || true
