@@ -16,6 +16,49 @@ from app.analysis.timeframes import get_data
 # 🔧 logic layer
 from app.logic.scenarios import analyze_scenarios
 from app.logic.elliott_logic import classify_elliott_with_kind
+
+def _normalize_percent(p):
+    # p = {'up':int,'down':int,'side':int}
+    u, d, s = float(p.get('up',0)), float(p.get('down',0)), float(p.get('side',0))
+    # clamp
+    u, d, s = max(0,u), max(0,d), max(0,s)
+    tot = u + d + s
+    if tot <= 0:
+        return {'up':33,'down':33,'side':34}
+    u = round(100 * u / tot)
+    d = round(100 * d / tot)
+    s = 100 - u - d
+    return {'up':int(u), 'down':int(d), 'side':int(s)}
+
+def _apply_mtf_weight(percent, df30, df15, df5):
+    # คำนวณฟิลเตอร์สองฝั่ง
+    from app.analysis.filters import mtf_filter_stack
+    long_res  = mtf_filter_stack(df30, df15, df5, bias="long")
+    short_res = mtf_filter_stack(df30, df15, df5, bias="short")
+
+    up, down, side = float(percent['up']), float(percent['down']), float(percent['side'])
+
+    # น้ำหนักแบบ conservative
+    if long_res.get('ready'):
+        up += 10
+    elif long_res.get('majority'):
+        up += 5
+
+    if short_res.get('ready'):
+        down += 10
+    elif short_res.get('majority'):
+        down += 5
+
+    # ถ้าไม่มีฝั่งไหนผ่านเลย → เพิ่ม side เล็กน้อย
+    if not long_res.get('majority') and not short_res.get('majority'):
+        side += 5
+
+    newp = _normalize_percent({'up': up, 'down': down, 'side': side})
+    mtf_meta = {
+        'long': {'ready': long_res['ready'], 'majority': long_res['majority'], 'scores': long_res['scores']},
+        'short':{'ready': short_res['ready'],'majority': short_res['majority'],'scores': short_res['scores']},
+    }
+    return newp, mtf_meta
 # 🔌 live data (ccxt/binance) — safe wrapper
 from app.adapters.price_provider import get_ohlcv_ccxt_safe
 
@@ -278,6 +321,8 @@ def analyze_wave(
     except Exception:
         pass
 
+    payload["meta"] = payload.get("meta", {})
+    payload["meta"]["mtf"] = mtf_meta
     return payload
 
 
