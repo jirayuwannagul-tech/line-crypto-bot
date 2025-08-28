@@ -14,13 +14,11 @@ services:
       - key: LINE_USER_ID
         sync: false   # กำหนดใน Dashboard
 
-  # --- Worker: Intraday scanner 24/7 ---
-  - type: worker
-    name: intraday-scanner
-    env: python
-    plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: python jobs/push_intraday_signals.py
+cronJobs:
+  # 🔔 สแกนสัญญาณทุก 5 นาที
+  - name: intraday-scan-every-5m
+    schedule: "*/5 * * * *"
+    command: python jobs/scan_once.py
     envVars:
       - key: PYTHONPATH
         value: "."
@@ -29,18 +27,9 @@ services:
       - key: LINE_USER_ID
         sync: false
       - key: MTA_SYMBOLS
-        value: "BTCUSDT"   # หรือหลายตัว เช่น BTCUSDT,ETHUSDT
+        value: "BTCUSDT"
 
-cronJobs:
-  - name: push-news-8am-ict
-    schedule: "0 1 * * *"   # 01:00 UTC = 08:00 ICT
-    command: python jobs/push_news.py --max-items 6 --limit-per-source 3
-    envVars:
-      - key: LINE_CHANNEL_ACCESS_TOKEN
-        sync: false
-      - key: TRANSLATOR_PROVIDER
-        value: "fallback"
-
+  # 🛡️ กันหลับ → ยิง health check web ทุก 5 นาที
   - name: keepalive
     schedule: "*/5 * * * *"
     command: curl -m 5 -sS https://line-crypto-hourly-news.onrender.com/health || true
