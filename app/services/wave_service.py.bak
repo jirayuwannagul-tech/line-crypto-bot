@@ -322,8 +322,7 @@ def analyze_wave(
         pass
 
     payload["meta"] = payload.get("meta", {})
-    payload.setdefault("meta", {})
-    payload["meta"]["mtf"] = (locals().get("mtf_meta") or {"status": "skipped"})
+    payload["meta"]["mtf"] = mtf_meta
     return payload
 
 
