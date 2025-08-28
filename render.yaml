@@ -1,4 +1,5 @@
 services:
+  # --- Web API ---
   - type: web
     name: line-crypto-hourly-news
     env: python
@@ -6,25 +7,42 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m app.main
     envVars:
+      - key: PYTHONPATH
+        value: "."
       - key: LINE_CHANNEL_ACCESS_TOKEN
-        sync: false   # ใส่ค่าใน Dashboard หลังจากนี้
+        sync: false   # ใส่ค่าใน Dashboard
+      - key: LINE_USER_ID
+        sync: false   # ใส่ค่าใน Dashboard (ถ้า web ต้องใช้)
 
-# --- Cron job: push news 08:00 ICT (01:00 UTC) ---
-services:
-  - type: cron
-    name: line-crypto-hourly-news-8am
+  # --- Worker: Intraday scanner 24/7 ---
+  - type: worker
+    name: intraday-scanner
     env: python
-    schedule: "0 1 * * *"   # 01:00 UTC = 08:00 Asia/Bangkok
+    plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: python jobs/push_news.py --max-items 6 --limit-per-source 3
+    startCommand: python jobs/push_intraday_signals.py
+    envVars:
+      - key: PYTHONPATH
+        value: "."
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false
+      - key: LINE_USER_ID
+        sync: false
+      - key: MTA_SYMBOLS
+        value: "BTCUSDT"   # เพิ่ม ETHUSDT,SOLUSDT ได้ภายหลัง
+
+# --- Cron jobs (นอก services) ---
+cronJobs:
+  - name: push-news-8am-ict
+    schedule: "0 1 * * *"   # 01:00 UTC = 08:00 Asia/Bangkok
+    command: python jobs/push_news.py --max-items 6 --limit-per-source 3
     envVars:
       - key: LINE_CHANNEL_ACCESS_TOKEN
-        sync: false   # ใส่ค่าใน Render Dashboard
+        sync: false
       - key: TRANSLATOR_PROVIDER
-        value: "fallback"   # เปลี่ยนเป็น google/deepl/openai ถ้าตั้งค่า API key แล้ว
-# --- เพิ่มด้านล่างไฟล์ render.yaml ---
-cronJobs:
+        value: "fallback"
+
   - name: keepalive
     schedule: "*/5 * * * *"
-    command: |
-      curl -m 5 -sS https://line-crypto-bot-dxbo.onrender.com/health || true
+    # แก้ URL ให้ตรงกับชื่อ web service ของคุณ
+    command: curl -m 5 -sS https://line-crypto-hourly-news.onrender.com/health || true
