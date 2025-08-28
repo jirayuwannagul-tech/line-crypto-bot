@@ -29,7 +29,6 @@ def _to_pair(symbol: str) -> str:
     s = (symbol or "").strip().upper()
     if "/" in s:
         return s
-    # รองรับ BTCUSDT, BTC-USDT, BTC:USDT
     s = s.replace("-", "/").replace(":", "/")
     if "/" not in s:
         s = s[:3] + "/" + s[3:] if len(s) > 3 else s
@@ -69,26 +68,21 @@ def fetch_all_ohlcv(exchange, symbol: str, timeframe_ccxt: str, since_ms: int, u
         all_rows.extend(batch)
 
         last_ts = batch[-1][0]
-        # ขยับ cursor ไปแท่งถัดไป
         next_cursor = last_ts + step_ms
         if next_cursor <= cursor:
             break
         cursor = next_cursor
 
-        # หยุดถ้าเลยเป้าหมาย หรือท้ายช่วง (จำนวน < limit)
         if last_ts >= until_ms or len(batch) < max_limit:
             break
 
-        # เคารพ rate limit
         time.sleep(max(getattr(exchange, "rateLimit", 200) / 1000.0, 0.2))
 
     if not all_rows:
         return pd.DataFrame(columns=["timestamp","open","high","low","close","volume"])
 
     df = pd.DataFrame(all_rows, columns=["timestamp","open","high","low","close","volume"])
-    df = df.drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop_index=True)
-
-    # แปลง timestamp เป็น Asia/Bangkok แล้วถอด tz ออก (ให้เข้ากับไฟล์เดิม)
+    df = df.drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert("Asia/Bangkok").dt.tz_localize(None)
     return df
 
@@ -96,7 +90,6 @@ def save_merge_csv(df: pd.DataFrame, out_path: str) -> None:
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     if os.path.exists(out_path):
         old = pd.read_csv(out_path)
-        # ปกป้อง schema: ensure columns เดิมครบ
         want_cols = ["timestamp","open","high","low","close","volume"]
         for c in want_cols:
             if c not in df.columns:
@@ -104,7 +97,6 @@ def save_merge_csv(df: pd.DataFrame, out_path: str) -> None:
         for c in want_cols:
             if c not in old.columns:
                 old[c] = pd.NA
-        # แปลง timestamp เป็น datetime (naive)
         old["timestamp"] = pd.to_datetime(old["timestamp"], errors="coerce")
         df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
         merged = pd.concat([old[want_cols], df[want_cols]], ignore_index=True)
@@ -117,23 +109,19 @@ def parse_args():
     p = argparse.ArgumentParser(description="Fetch OHLCV from Binance via CCXT")
     p.add_argument("symbol", help="เช่น BTCUSDT หรือ BTC/USDT")
     p.add_argument("timeframe", help="หนึ่งค่า: 5M, 15M, 30M, 1H, 4H, 1D, 1W")
-    p.add_argument("--start", help='วันเริ่ม (YYYY-MM-DD). ตัวอย่าง: "2024-01-01"', default=None)
-    p.add_argument("--end", help='วันสิ้นสุด (YYYY-MM-DD). ไม่ใส่ = ตอนนี้', default=None)
+    p.add_argument("--start", help='วันเริ่ม (YYYY-MM-DD)', default=None)
+    p.add_argument("--end", help='วันสิ้นสุด (YYYY-MM-DD)', default=None)
     p.add_argument("--days", type=int, help="ระบุจำนวนวันย้อนหลังแทน --start/--end", default=None)
     p.add_argument("--limit", type=int, help="ccxt limit ต่อครั้ง (default=1000)", default=1000)
     return p.parse_args()
 
 def main():
     args = parse_args()
-
     symbol_pair = _to_pair(args.symbol)
     tf_ccxt = _norm_tf(args.timeframe)
     max_limit = int(args.limit or 1000)
-
-    # เปิด rate limit ในตัว
     exchange = ccxt.binance({"enableRateLimit": True})
 
-    # สร้างช่วงเวลา
     now_ms = exchange.milliseconds()
     if args.days is not None:
         since_dt = datetime.now(timezone.utc) - timedelta(days=int(args.days))
@@ -142,10 +130,9 @@ def main():
     else:
         if args.start:
             start_naive = datetime.strptime(args.start, "%Y-%m-%d")
-            start_local = start_naive.replace(tzinfo=timezone(timedelta(hours=7)))  # Asia/Bangkok = UTC+7
+            start_local = start_naive.replace(tzinfo=timezone(timedelta(hours=7)))
             since_ms = int(start_local.astimezone(timezone.utc).timestamp() * 1000)
         else:
-            # default: 5 ปี
             since_dt = datetime.now(timezone.utc) - timedelta(days=int(5*365.25))
             since_ms = int(since_dt.timestamp() * 1000)
 
@@ -156,15 +143,12 @@ def main():
         else:
             until_ms = now_ms
 
-    # ดึงข้อมูล
     print(f"== Fetch {symbol_pair} {tf_ccxt} ==")
     df = fetch_all_ohlcv(exchange, symbol_pair, tf_ccxt, since_ms, until_ms, max_limit=max_limit)
 
-    # ตั้งชื่อไฟล์แบบชุดเดิม (BTCUSDT_5M.csv ฯลฯ)
     sym_noslash = args.symbol.replace("/", "").replace(":", "").replace("-", "")
     tf_key = [k for k, v in _BINANCE_INTERVAL.items() if v == tf_ccxt][0]
     out = f"data/{sym_noslash}_{tf_key}.csv"
-
     save_merge_csv(df, out)
 
     if len(df):
@@ -174,3 +158,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
