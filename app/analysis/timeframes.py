@@ -8,7 +8,8 @@ import asyncio
 from typing import Literal, Optional, Sequence, List, Tuple, Dict
 
 import pandas as pd
-import pathlib 
+import pathlib
+
 # ---- Public API ----
 __all__ = [
     "get_data",
@@ -22,7 +23,9 @@ __all__ = [
 
 # ---- Config ----
 DATA_PATH_DEFAULT = os.getenv("HISTORICAL_XLSX_PATH", "app/data/historical.xlsx")
-SUPPORTED_TF: tuple[str, ...] = ("1H", "4H", "1D", "1W")
+
+# ✅ เพิ่มรองรับ minute TF
+SUPPORTED_TF: tuple[str, ...] = ("5M", "15M", "30M", "1H", "4H", "1D", "1W")
 REQUIRED_COLUMNS: Sequence[str] = ("timestamp", "open", "high", "low", "close", "volume")
 
 # ========= Real-time fetch settings (ENV) =========
@@ -33,6 +36,9 @@ REALTIME_TIMEOUT = int(os.getenv("REALTIME_TIMEOUT", "12"))    # seconds
 
 # ---- Background updater config (ใช้เมื่อเรียก start_timeframe_service) ----
 _TIMEFRAME_SECONDS: Dict[str, int] = {
+    "5M": 300,
+    "15M": 900,
+    "30M": 1800,
     "1H": 3600,
     "4H": 14400,
     "1D": 86400,
@@ -109,12 +115,28 @@ def _ensure_required_columns(df: pd.DataFrame, where: str) -> pd.DataFrame:
     return df.loc[:, list(REQUIRED_COLUMNS)]
 
 def _parse_and_clean_strict(df: pd.DataFrame) -> pd.DataFrame:
-    # robust timestamp parsing with unit detection (s/ms/us/ns)
+    """
+    ทำให้ timestamp เป็น UTC tz-aware และคอลัมน์ตัวเลขเป็น float64
+    กรณี CSV จากสคริปต์ fetch ที่เขียน timestamp เป็นเวลา 'ท้องถิ่นกรุงเทพ (naive)'
+    จะ localize('Asia/Bangkok') แล้ว .tz_convert('UTC')
+    """
     ts_raw = pd.to_numeric(df['timestamp'], errors='coerce')
+
     if ts_raw.notna().sum() == 0:
-        # not numeric (e.g., date strings) → let pandas parse
-        ts = pd.to_datetime(df['timestamp'], utc=True, errors='coerce')
+        # not numeric (น่าจะเป็นสตริงวันที่)
+        ts_try = pd.to_datetime(df['timestamp'], errors='coerce')  # อาจเป็น naive
+        # ถ้าเป็น naive → ถือว่าเป็นเวลาในโซนกรุงเทพ แล้วแปลงไป UTC
+        # (Bangkok ไม่มี DST จึงปลอดภัย)
+        if hasattr(ts_try, "dt"):
+            try:
+                ts = ts_try.dt.tz_localize("Asia/Bangkok").dt.tz_convert("UTC")
+            except (TypeError, ValueError):
+                # ถ้าบางค่าเป็น tz-aware ปะปนกัน ให้บังคับแปลงเป็น UTC โดยถอด/เติม tz ตามเหมาะสม
+                ts = pd.to_datetime(df['timestamp'], utc=True, errors='coerce')
+        else:
+            ts = pd.to_datetime(df['timestamp'], utc=True, errors='coerce')
     else:
+        # เป็นตัวเลข → เดาตามสเกลหน่วยเวลา
         m = float(ts_raw.max())
         if m < 1e12:       # seconds
             ts = pd.to_datetime(ts_raw, unit='s',  utc=True, errors='coerce')
@@ -124,7 +146,9 @@ def _parse_and_clean_strict(df: pd.DataFrame) -> pd.DataFrame:
             ts = pd.to_datetime(ts_raw, unit='us', utc=True, errors='coerce')
         else:              # nanoseconds
             ts = pd.to_datetime(ts_raw, unit='ns', utc=True, errors='coerce')
+
     df = df.assign(timestamp=ts).dropna(subset=['timestamp'])
+
     for col in ("open", "high", "low", "close", "volume"):
         df[col] = pd.to_numeric(df[col], errors="coerce")
     df = df.dropna(subset=("open", "high", "low", "close", "volume"))
@@ -170,19 +194,26 @@ def _read_excel_strict(
 
 
 # ---- CSV helpers ----
-def _csv_path(symbol: str, tf: str) -> str:
-    # ใช้ absolute path อ้างอิงโฟลเดอร์ของโมดูลนี้ (กัน CWD เพี้ยนตอนรัน cron)
+def _csv_candidates(symbol: str, tf: str) -> List[str]:
+    """
+    คืนลิสต์ path ที่เป็นไปได้:
+      - app/data/<SYMBOL>_<TF>.csv
+      - data/<SYMBOL>_<TF>.csv
+    """
     base = pathlib.Path(__file__).resolve().parent  # app/analysis
-    data_dir = (base.parent / "data").resolve()    # app/data
-    fname = f"{symbol.upper().replace(':','').replace('/','')}_{tf.upper()}.csv"
-    return str((data_dir / fname))
+    fname = f"{symbol.upper().replace(':','').replace('/','').replace('-','')}_{tf.upper()}.csv"
+    app_data = (base.parent / "data" / fname).resolve()
+    root_data = (base.parent.parent / "data" / fname).resolve()
+    return [str(app_data), str(root_data)]
 
 def _read_csv_strict(symbol: str, tf: str) -> pd.DataFrame:
-    path = _csv_path(symbol, tf)
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"CSV not found: {path}")
+    candidates = _csv_candidates(symbol, tf)
+    path = next((p for p in candidates if os.path.exists(p)), None)
+    if path is None:
+        raise FileNotFoundError(f"CSV not found. Tried: {candidates}")
 
     raw = pd.read_csv(path)
+    # ทำให้ column name lower-case เพื่อ map ง่าย
     raw.columns = [str(c).lower() for c in raw.columns]
     if "timestamp" not in raw.columns and "date" in raw.columns:
         raw = raw.rename(columns={"date": "timestamp"})
@@ -212,9 +243,12 @@ def _resample_to_1w(df_1d: pd.DataFrame) -> pd.DataFrame:
 
 # ========= Real-time provider chain (Binance first, pluggable) =========
 def _tf_to_exchange_interval(tf: str) -> str:
-    """Map '1H','4H','1D','1W' -> exchange interval string (Binance-compatible)."""
+    """Map TF -> exchange interval string (Binance-compatible)."""
     t = (tf or "").strip().upper()
     return {
+        "5M": "5m",
+        "15M": "15m",
+        "30M": "30m",
         "1H": "1h",
         "4H": "4h",
         "1D": "1d",
@@ -228,7 +262,7 @@ def _fetch_ohlcv_binance(symbol: str, interval: str, limit: int) -> Optional[pd.
     """
     import requests  # local import เพื่อลด dependency ตอนใช้โหมดไฟล์
     url = "https://api.binance.com/api/v3/klines"
-    params = {"symbol": symbol.upper(), "interval": interval, "limit": min(int(limit), 1000)}
+    params = {"symbol": symbol.upper().replace("/",""), "interval": interval, "limit": min(int(limit), 1000)}
     try:
         r = requests.get(url, params=params, timeout=REALTIME_TIMEOUT)
         r.raise_for_status()
@@ -290,7 +324,7 @@ def _fetch_from_providers(symbol: str, tf: str, limit: int) -> Optional[pd.DataF
 # ---- Main (on-demand loader; ไม่พึ่ง background) ----
 def get_data(
     symbol: str,
-    tf: Literal["1H", "4H", "1D", "1W"],
+    tf: Literal["5M", "15M", "30M", "1H", "4H", "1D", "1W"],
     *,
     xlsx_path: Optional[str] = None,
     engine: str = "openpyxl",
@@ -299,12 +333,12 @@ def get_data(
     Load OHLCV data.
 
     Modes:
-      - Default (REALTIME != '1'): Excel → CSV → (for 1W) resample from 1D
+      - Default (REALTIME != '1'): Excel/CSV → (for 1W) resample from 1D
       - Real-time (REALTIME == '1'): Provider chain (e.g., Binance). If all providers fail → fallback to files.
 
-    Returns DataFrame with columns: timestamp(UTC), open, high, low, close, volume
+    Returns DataFrame with columns: timestamp(UTC, tz-aware), open, high, low, close, volume
     """
-    tf_u = tf.upper()
+    tf_u = (tf or "").upper()
     if tf_u not in SUPPORTED_TF:
         raise ValueError(f"Unsupported timeframe '{tf}'. Supported: {SUPPORTED_TF}")
 
@@ -316,7 +350,7 @@ def get_data(
         # ถ้า API ล้มเหลว → ตกกลับไปใช้ไฟล์ต่อด้านล่าง
 
     # ========= File-based flow =========
-    # 1) ลอง Excel ก่อน
+    # 1) ลอง Excel ก่อน (คาดว่าจะมีเฉพาะ 1H/4H/1D/1W)
     path = xlsx_path or DATA_PATH_DEFAULT
 
     def _try_excel(sym: str, tf_: str) -> pd.DataFrame | None:
@@ -331,8 +365,8 @@ def get_data(
         except Exception:
             return None
 
-    # ----- 1H / 4H / 1D -----
-    if tf_u in ("1H", "4H", "1D"):
+    if tf_u in ("5M", "15M", "30M", "1H", "4H", "1D"):
+        # minute TF ก็มักจะอ่านจาก CSV เป็นหลัก; ถ้ามี Excel ก็ใช้ได้
         df = _try_excel(symbol, tf_u)
         if df is None or df.empty:
             df = _try_csv(symbol, tf_u)
