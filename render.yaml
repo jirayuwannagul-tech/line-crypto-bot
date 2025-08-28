@@ -25,6 +25,6 @@ services:
 # --- เพิ่มด้านล่างไฟล์ render.yaml ---
 cronJobs:
   - name: keepalive
-    schedule: "*/5 * * * *"   # ทุก 5 นาที
+    schedule: "*/5 * * * *"
     command: |
-      curl -m 5 -sS https://<YOUR-SERVICE>.onrender.com/health || true
+      curl -m 5 -sS https://line-crypto-bot-dxbo.onrender.com/health || true
