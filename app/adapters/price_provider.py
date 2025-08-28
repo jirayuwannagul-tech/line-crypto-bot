@@ -4,7 +4,13 @@ from typing import Optional
 import re
 import pandas as pd
 
-__all__ = ["get_ohlcv_ccxt_safe", "fetch_spot_text", "get_spot_ccxt", "get_spot_text_ccxt"]
+__all__ = [
+    "get_ohlcv_ccxt_safe",
+    "fetch_spot_text",
+    "get_spot_ccxt",
+    "get_spot_text_ccxt",
+    "get_price",
+]
 
 # ---- Map TF ----
 _BINANCE_INTERVAL = {
@@ -19,6 +25,10 @@ _BINANCE_INTERVAL = {
 }
 
 def _to_binance_symbol(symbol: str) -> str:
+    """
+    ส่งกลับสัญลักษณ์สำหรับ REST ของ Binance (เช่น BTCUSDT) จากอินพุตที่รับได้หลายรูปแบบ
+    รองรับ 'BTCUSDT', 'BTC/USDT', 'BTC-USDT', 'BTC:USDT'
+    """
     s = (symbol or "").strip().upper()
     if "/" in s or ":" in s or "-" in s:
         s = s.replace(":", "/").replace("-", "/")
@@ -30,6 +40,7 @@ def _to_binance_symbol(symbol: str) -> str:
     return f"{s}USDT"
 
 def _to_display_pair(symbol: str) -> str:
+    """สำหรับข้อความแสดงผล: คืนเป็นรูปแบบ BASE/QUOTE เสมอ"""
     s = (symbol or "").strip().upper()
     s = s.replace(":", "/").replace("-", "/")
     if "/" in s:
@@ -108,6 +119,7 @@ def get_ohlcv_ccxt_safe(symbol: str, tf: str, limit: int = 500) -> pd.DataFrame:
 def get_spot_ccxt(symbol: str = "BTC/USDT") -> Optional[float]:
     """
     คืนราคาล่าสุด (float) จาก Binance ผ่าน ccxt; หาก ccxt ใช้ไม่ได้ ตกลง REST
+    รองรับ 'BTCUSDT' และ 'BTC/USDT'
     """
     # 1) ccxt first
     try:
@@ -164,3 +176,28 @@ def fetch_spot_text(symbol: str) -> str:
         return f"{display} last price: {px:,.2f} USDT"
     except Exception as e:
         return f"{display} price unavailable: {e}"
+
+# ---- Public: get_price (ใช้โดย jobs/watch_targets) ----
+def get_price(symbol: str = "BTCUSDT", *, timeout_sec: Optional[float] = 10.0) -> float:
+    """
+    คืนราคาล่าสุดแบบ float
+    - รองรับสัญลักษณ์ 'BTCUSDT' และ 'BTC/USDT'
+    - ใช้ ccxt ก่อน ถ้าไม่ได้จะ fallback REST
+    """
+    px = get_spot_ccxt(symbol)
+    if px is None:
+        # ลอง REST ตรง ๆ อีกรอบตาม timeout ที่รับเข้ามา
+        try:
+            import requests
+            sym_rest = _to_binance_symbol(symbol)
+            r = requests.get(
+                "https://api.binance.com/api/v3/ticker/price",
+                params={"symbol": sym_rest},
+                timeout=max(3, int(timeout_sec or 10)),
+            )
+            r.raise_for_status()
+            data = r.json()
+            px = float(data["price"])
+        except Exception as e:
+            raise RuntimeError(f"fetch price failed for {symbol}: {e}")
+    return float(px)

@@ -157,7 +157,7 @@ class LineDelivery:
 
 
 # =============================================================================
-# LAYER F) MODULE-LEVEL HELPERS (สำหรับเทส/ใช้งานง่าย)
+# LAYER F) MODULE-LEVEL HELPERS (สำหรับเทส/ใช้งานง่าย + backward-compat)
 # =============================================================================
 
 def _get_delivery() -> LineDelivery:
@@ -177,24 +177,16 @@ def _get_delivery() -> LineDelivery:
         return LineDelivery("", "", dry_run=True)
 
 
+# ===== ระดับโมดูล: API แบบใหม่ (ชื่ออ่านง่าย) =====
 def reply_message(reply_token: str, message: str) -> Dict[str, Any]:
-    """
-    ฟังก์ชันระดับโมดูล: ตอบกลับข้อความด้วย reply_token
-    ใช้ใน webhook handler ได้สะดวก
-    """
     delivery = _get_delivery()
     return delivery.reply_text(reply_token, message)
 
 
 def push_message(message: str, to: Optional[str] = None) -> Dict[str, Any]:
-    """
-    ฟังก์ชันระดับโมดูล: push ข้อความหา user/group
-    - ถ้าไม่ส่ง 'to' จะลองอ่านจาก ENV LINE_USER_ID
-    """
     delivery = _get_delivery()
     dest = to or os.getenv(ENV_DEFAULT_TO)
     if not dest:
-        # ถ้าไม่มีปลายทาง ให้ DRY-RUN (เพื่อไม่ให้เทสล้ม)
         log.info("[DRY-RUN] push_message (no recipient): %s", message)
         print(f"[DRY-RUN] push_message (no recipient): {message}")
         return {"ok": True, "dry_run": True, "status": 0, "body": "", "message": message}
@@ -202,19 +194,31 @@ def push_message(message: str, to: Optional[str] = None) -> Dict[str, Any]:
 
 
 def broadcast_message(message: str) -> Dict[str, Any]:
-    """
-    ฟังก์ชันระดับโมดูล:
-    - โหมดจริง: ใช้ LineDelivery.broadcast_text(message)
-    - โหมด DRY-RUN: ไม่ยิง API จริง แค่ log/print และคืน ok=True
-    """
     delivery = _get_delivery()
-    # ถ้า delivery เป็น DRY-RUN อยู่แล้ว ชั้นในจะจัดการคืน dry_run ให้เอง
     return delivery.broadcast_text(message)
 
 
+# ===== ระดับโมดูล: BACKWARD-COMPAT (ชื่อเดิมที่โค้ดอื่นคาดหวัง) =====
+def push_text(to: str, text: str) -> Dict[str, Any]:
+    """คงชื่อเดิมไว้สำหรับโค้ดเก่า"""
+    delivery = _get_delivery()
+    return delivery.push_text(to, text)
+
+
+def broadcast_text(text: str) -> Dict[str, Any]:
+    """คงชื่อเดิมไว้สำหรับโค้ดเก่า"""
+    delivery = _get_delivery()
+    return delivery.broadcast_text(text)
+
+
 __all__ = [
+    # Class
     "LineDelivery",
+    # Newer helper names
     "reply_message",
     "push_message",
     "broadcast_message",
+    # Backward-compatible names
+    "push_text",
+    "broadcast_text",
 ]
