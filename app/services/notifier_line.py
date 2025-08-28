@@ -40,7 +40,7 @@ class LineNotifier:
             try:
                 status, body = line_broadcast_text(message, self.token)  # type: ignore
                 ok = 200 <= status < 300
-                return ok, f"LINE status={status} body={body[:200]}"
+                return ok, f"LINE status={status}"
             except Exception as e:
                 return False, f"LINE error: {e}"
         # Dummy: log/echo แทน

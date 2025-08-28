@@ -1,7 +1,10 @@
+# app/services/price_provider_binance.py
 from __future__ import annotations
 
 from typing import Optional
 import re
+import os
+import requests
 import pandas as pd
 
 __all__ = [
@@ -70,9 +73,8 @@ def _to_dataframe_ohlcv(rows) -> pd.DataFrame:
     df = df.dropna().sort_values("timestamp").reset_index(drop=True)
     return df
 
-# ---- REST fallback ----
+# ---- REST fallback สำหรับ OHLCV (คง base เดิมไว้) ----
 def _fetch_via_binance_rest(symbol: str, tf: str, limit: int) -> Optional[pd.DataFrame]:
-    import requests
     sym = _to_binance_symbol(symbol)
     interval = _interval_to_binance(tf)
     url = "https://api.binance.com/api/v3/klines"
@@ -137,9 +139,8 @@ def get_spot_ccxt(symbol: str = "BTC/USDT") -> Optional[float]:
     except Exception:
         pass
 
-    # 2) REST fallback
+    # 2) REST fallback (ฐานหลัก)
     try:
-        import requests
         sym_rest = _to_binance_symbol(symbol)
         r = requests.get("https://api.binance.com/api/v3/ticker/price", params={"symbol": sym_rest}, timeout=8)
         r.raise_for_status()
@@ -164,7 +165,6 @@ def fetch_spot_text(symbol: str) -> str:
     คืนข้อความราคาล่าสุดแบบสั้นสำหรับห้องแชท เช่น:
     'BTC/USDT last price: 111,234.56 USDT'
     """
-    import requests
     sym_rest = _to_binance_symbol(symbol)
     display = _to_display_pair(symbol)
     try:
@@ -176,27 +176,40 @@ def fetch_spot_text(symbol: str) -> str:
     except Exception as e:
         return f"{display} price unavailable: {e}"
 
+# ---- REST bases & helper สำหรับ fallback อัตโนมัติ ----
+_BINANCE_BASES = [
+    os.getenv("BINANCE_API_BASE", "https://api.binance.com").rstrip("/"),
+    "https://api1.binance.com",
+    "https://api2.binance.com",
+    "https://api3.binance.com",
+]
+
+def _rest_get_price(symbol: str, timeout_sec: Optional[float]) -> float:
+    sym_rest = _to_binance_symbol(symbol)
+    last_err: Optional[Exception] = None
+    for base in _BINANCE_BASES:
+        url = f"{base}/api/v3/ticker/price"
+        try:
+            r = requests.get(url, params={"symbol": sym_rest}, timeout=max(3, int(timeout_sec or 10)))
+            r.raise_for_status()
+            data = r.json()
+            return float(data["price"])
+        except Exception as e:
+            last_err = e
+            continue
+    raise RuntimeError(f"REST price failed via all endpoints for {symbol}: {last_err}")
+
 # ---- Public: get_price (ใช้โดย jobs/watch_targets) ----
 def get_price(symbol: str = "BTCUSDT", *, timeout_sec: Optional[float] = 10.0) -> float:
     """
     คืนราคาล่าสุดแบบ float
     - รองรับสัญลักษณ์ 'BTCUSDT' และ 'BTC/USDT'
-    - ใช้ ccxt ก่อน ถ้าไม่ได้จะ fallback REST
+    - ใช้ ccxt ก่อน ถ้าไม่ได้จะ fallback REST (หมุน endpoint อัตโนมัติ)
     """
     px = get_spot_ccxt(symbol)
     if px is None:
-        # ลอง REST ตรง ๆ อีกรอบตาม timeout ที่รับเข้ามา
         try:
-            import requests
-            sym_rest = _to_binance_symbol(symbol)
-            r = requests.get(
-                "https://api.binance.com/api/v3/ticker/price",
-                params={"symbol": sym_rest},
-                timeout=max(3, int(timeout_sec or 10)),
-            )
-            r.raise_for_status()
-            data = r.json()
-            px = float(data["price"])
+            px = _rest_get_price(symbol, timeout_sec)
         except Exception as e:
             raise RuntimeError(f"fetch price failed for {symbol}: {e}")
     return float(px)

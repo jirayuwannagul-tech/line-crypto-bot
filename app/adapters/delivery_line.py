@@ -12,17 +12,20 @@ __all__ = ["broadcast_text"]
 
 LINE_API_BASE = "https://api.line.me"
 
+# [PATCH] app/adapters/delivery_line.py (แทนที่ _post ทั้งฟังก์ชัน)
 def _post(path: str, body: Dict[str, Any], token: str) -> Tuple[int, str]:
+    import json, requests
     url = f"{LINE_API_BASE}{path}"
     headers = {
         "Content-Type": "application/json; charset=utf-8",
         "Authorization": f"Bearer {token}",
     }
     try:
-        resp = requests.post(url, json=body, headers=headers, timeout=10)
-        # คืน status กับข้อความสั้น ๆ
-        text = resp.text if isinstance(resp.text, str) else str(resp.content)
-        return resp.status_code, text
+        # ส่งเป็น bytes เอง (กันขั้น encode ภายใน)
+        payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        resp = requests.post(url, data=payload, headers=headers, timeout=10)
+        # ไม่อ่าน resp.text (กัน decode ผิดพลาด)
+        return resp.status_code, ""
     except requests.RequestException as e:
         return 0, f"RequestsError: {e}"
 
