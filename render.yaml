@@ -22,3 +22,9 @@ services:
         sync: false   # ใส่ค่าใน Render Dashboard
       - key: TRANSLATOR_PROVIDER
         value: "fallback"   # เปลี่ยนเป็น google/deepl/openai ถ้าตั้งค่า API key แล้ว
+# --- เพิ่มด้านล่างไฟล์ render.yaml ---
+cronJobs:
+  - name: keepalive
+    schedule: "*/5 * * * *"   # ทุก 5 นาที
+    command: |
+      curl -m 5 -sS https://<YOUR-SERVICE>.onrender.com/health || true
