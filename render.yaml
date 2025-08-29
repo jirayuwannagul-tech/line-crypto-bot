@@ -1,3 +1,4 @@
+# render.yaml
 services:
   # --- Web API ---
   - type: web
@@ -10,9 +11,12 @@ services:
       - key: PYTHONPATH
         value: "."
       - key: LINE_CHANNEL_ACCESS_TOKEN
-        sync: false   # กำหนดใน Dashboard
+        sync: false   # ตั้งใน Dashboard
       - key: LINE_USER_ID
-        sync: false   # กำหนดใน Dashboard
+        sync: false   # ตั้งใน Dashboard
+      # (แนะนำ) ระบุเวอร์ชัน Python ให้ชัด
+      - key: PYTHON_VERSION
+        value: 3.11.9
 
 cronJobs:
   - name: intraday-scan-every-5m
