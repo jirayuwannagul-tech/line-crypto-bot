@@ -23,8 +23,13 @@ class AlertSettings:
     )
     # interval สำหรับเช็กแจ้งเตือน (นาที)
     PRICE_ALERT_INTERVAL_MIN: int = 5
-    # เปิด/ปิด push notification
+    # เปิด/ปิด push notification (ชื่อหลัก)
     ENABLE_PUSH: bool = True
+
+    # ✅ alias ใช้แทน .enabled ได้ (กัน error)
+    @property
+    def enabled(self) -> bool:
+        return self.ENABLE_PUSH
 
 
 # ✅ ตัวแปร global ที่ให้ import ได้

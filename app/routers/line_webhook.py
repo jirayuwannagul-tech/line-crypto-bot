@@ -15,6 +15,7 @@ import re
 import logging
 import asyncio
 import datetime as _dt
+import string
 
 from fastapi import APIRouter, Request, HTTPException
 import httpx
@@ -37,10 +38,23 @@ _NEWS_INTERVAL = int(os.getenv("NEWS_PUSH_EVERY_SEC", "0"))
 _news_task: Optional[asyncio.Task] = None
 
 # =============================================================================
+# Helpers
+# =============================================================================
+def _ascii_token_from_env() -> str:
+    """
+    ดึง LINE_CHANNEL_ACCESS_TOKEN แล้ว 'ล้าง' ให้เหลือ ASCII 7-bit เท่านั้น
+    กันกรณีมี zero-width/emoji/BOM หลุดเข้ามา → httpx จะไม่พังที่ normalize_header_value
+    """
+    raw = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "") or ""
+    # เก็บเฉพาะอักขระที่พิมพ์ได้และอยู่ในช่วง ASCII (<128)
+    cleaned = "".join(ch for ch in raw if ch in string.printable and ord(ch) < 128).strip()
+    return cleaned
+
+# =============================================================================
 # LINE reply helper
 # =============================================================================
 async def _reply_text(reply_token: str, text: str) -> None:
-    token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
+    token = _ascii_token_from_env()
     if not token:
         raise HTTPException(status_code=400, detail="LINE_CHANNEL_ACCESS_TOKEN is missing")
 
@@ -59,7 +73,7 @@ async def _reply_text(reply_token: str, text: str) -> None:
 # LINE push helper
 # =============================================================================
 async def _push_text(user_id: str, text: str) -> None:
-    token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
+    token = _ascii_token_from_env()
     if not token:
         raise HTTPException(status_code=400, detail="LINE_CHANNEL_ACCESS_TOKEN is missing")
 
