@@ -99,7 +99,7 @@ def _is_alert_enabled() -> bool:
 # Tick รอบเดียว (หลายเหรียญ)
 # ==============================
 async def tick_once(symbols: Optional[List[str]] = None, dry_run: bool = False) -> None:
-    if not _is_alert_enabled():
+    if not getattr(alert_settings, "enabled", getattr(alert_settings, "ENABLE_PUSH", True)):
         logger.info("Alerts disabled; skip tick.")
         return
 
