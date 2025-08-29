@@ -1,44 +1,86 @@
-# app/scheduler/runner.py
-"""
-Scheduler Runner
-เรียกจาก Cloud Scheduler → tick_once → วิเคราะห์/ส่งสัญญาณ 1 รอบ
-"""
+# app/routers/config.py
+from __future__ import annotations
 
 from typing import Optional, Dict, Any
-import logging
+from fastapi import APIRouter
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.services.wave_service import analyze_wave, build_brief_message
-
-logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/config", tags=["config"])
 
 
-def tick_once(symbols: Optional[list[str]] = None,
-              dry_run: bool = False) -> Dict[str, Any]:
+class Settings(BaseSettings):
     """
-    รันการวิเคราะห์สัญลักษณ์ที่กำหนด 1 รอบ
-    :param symbols: รายชื่อสัญลักษณ์ (เช่น ["BTCUSDT","ETHUSDT"])
-    :param dry_run: ถ้า True → วิเคราะห์แต่ไม่ push LINE
-    :return: dict {symbol: payload}
+    โหลดคอนฟิกจาก ENV/.env สำหรับระบบแจ้งเตือน/สครอน/LINE ฯลฯ
+    - อนุญาต ENV ที่ไม่มีในโมเดล (extra='ignore') -> กันล้มตอนรันบนเครื่อง/คลาวด์
+    - โหลดจากไฟล์ .env ถ้ามี
+    - ไม่สนตัวพิมพ์เล็ก/ใหญ่
     """
-    results: Dict[str, Any] = {}
-    symbols = symbols or ["BTCUSDT"]
+    model_config = SettingsConfigDict(
+        extra="ignore",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+    )
 
-    for sym in symbols:
-        try:
-            payload = analyze_wave(sym, "1H")  # ค่า default ใช้ 1H
-            msg = build_brief_message(payload)
+    # ====== LINE / Alert / Scheduler (เติมเท่าที่จำเป็น) ======
+    line_channel_access_token: Optional[str] = Field(default=None, description="LINE channel access token")
+    line_channel_secret: Optional[str] = Field(default=None, description="LINE channel secret")
+    line_user_id: Optional[str] = Field(default=None, description="Default LINE user id to push")
 
-            results[sym] = {
-                "payload": payload,
-                "message": msg,
-            }
+    scheduler_token: Optional[str] = Field(default=None, description="Internal token for Cloud Scheduler to call /jobs")
+    alert_enabled: bool = Field(default=True, description="Enable/disable LINE alert push")
+    alert_threshold_pct: float = Field(default=0.03, description="Default alert threshold %")
+    alert_cooldown_sec: int = Field(default=900, description="Cooldown seconds between alerts")
+    alert_poll_sec: int = Field(default=10, description="Polling interval seconds")
 
-            if not dry_run:
-                # TODO: ต่อเข้ากับ notifier_line ถ้าเปิด ALERT_ENABLED
-                logger.info("Would push LINE: %s", msg)
+    # ====== Data/Provider (ระบุเท่าที่ใช้) ======
+    binance_api_key: Optional[str] = None
+    binance_api_secret: Optional[str] = None
 
-        except Exception as e:
-            logger.exception("tick_once error for %s", sym)
-            results[sym] = {"error": str(e)}
+    # ====== Misc ======
+    env_name: Optional[str] = Field(default=None, description="Environment name (local/staging/prod)")
 
-    return results
+
+settings = Settings()
+
+
+def _mask(v: Optional[str]) -> Optional[str]:
+    if v is None:
+        return None
+    if not isinstance(v, str):
+        return str(v)
+    if len(v) <= 6:
+        return "***"
+    return v[:3] + "***" + v[-3:]
+
+
+@router.get("/health")
+def config_health() -> Dict[str, Any]:
+    return {"ok": True, "env": settings.env_name or "unknown"}
+
+
+@router.get("/")
+def config_summary() -> Dict[str, Any]:
+    """
+    สรุปคีย์หลักๆ แบบ mask (ไม่โชว์ค่าเต็ม/ความลับ)
+    """
+    return {
+        "env": settings.env_name or "unknown",
+        "alert": {
+            "enabled": settings.alert_enabled,
+            "threshold_pct": settings.alert_threshold_pct,
+            "cooldown_sec": settings.alert_cooldown_sec,
+            "poll_sec": settings.alert_poll_sec,
+        },
+        "line": {
+            "channel_access_token": _mask(settings.line_channel_access_token),
+            "channel_secret": _mask(settings.line_channel_secret),
+            "user_id": _mask(settings.line_user_id),
+        },
+        "scheduler": {"token": _mask(settings.scheduler_token)},
+        "providers": {
+            "binance_api_key": _mask(settings.binance_api_key),
+            "binance_api_secret": _mask(settings.binance_api_secret),
+        },
+    }
