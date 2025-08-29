@@ -81,6 +81,7 @@ rich==14.1.0
 rich-toolkit==0.15.0
 scikit-learn==1.7.1
 scipy==1.16.1
+schedule==1.2.1
 setuptools==80.9.0
 shellingham==1.5.4
 six==1.17.0
