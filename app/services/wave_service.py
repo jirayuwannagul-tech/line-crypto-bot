@@ -464,3 +464,75 @@ def build_brief_message(payload: Dict[str, Any]) -> str:
             lines.append(f"SL −{int(sl_pct*100)}%: {slC}")
 
     return "\n".join(lines)
+def _extract_weekly_bias(payload):
+    wb = None
+    if isinstance(payload, dict):
+        wc = payload.get("weekly_ctx") or {}
+        cur = wc.get("current") or {}
+        wb = cur.get("weekly_bias") or cur.get("direction") \
+             or payload.get("weekly_bias") \
+             or (payload.get("meta", {}).get("weekly_bias") if isinstance(payload.get("meta", {}), dict) else None)
+    if isinstance(wb, str):
+        wb = wb.lower()
+    if wb in ("up", "bull", "bullish"):
+        return "UP"
+    if wb in ("down", "bear", "bearish"):
+        return "DOWN"
+    return None
+
+# เก็บของเดิมไว้ถ้ามี
+try:
+    _old_build_brief_message = build_brief_message  # type: ignore[name-defined]
+except Exception:
+    _old_build_brief_message = None  # ไม่มีของเดิม
+
+def build_brief_message(payload):
+    # สร้างหัวเรื่องพร้อมแท็ก 1W
+    symbol = (payload.get("symbol") if isinstance(payload, dict) else None) or \
+             (payload.get("meta", {}).get("symbol") if isinstance(payload, dict) else None) or "?"
+    tf = (payload.get("tf") if isinstance(payload, dict) else None) or \
+         (payload.get("meta", {}).get("tf") if isinstance(payload, dict) else None) or "?"
+    tag = _extract_weekly_bias(payload)
+    head = f"{symbol} ({tf})"
+    if tag:
+        head = f"{head} [{tag} 1W]"
+
+    # ถ้ามีฟังก์ชันเดิม: ใช้เดิมสร้างเนื้อหา แล้วแทนบรรทัดแรกเป็น head ใหม่
+    if _old_build_brief_message and callable(_old_build_brief_message):
+        try:
+            msg = _old_build_brief_message(payload)
+            lines = (msg or "").splitlines()
+            if lines:
+                lines[0] = head
+                return "\n".join(lines)
+        except Exception:
+            pass  # ถ้าเดิมพัง ใช้ fallback ด้านล่าง
+
+    # fallback อย่างน้อยมีหัวเรื่อง
+    return head
+# --- PATCH: improve weekly-bias extraction (read from levels.elliott.current.weekly_bias) ---
+def _extract_weekly_bias(payload):
+    wb = None
+    try:
+        if isinstance(payload, dict):
+            # 1) ตำแหน่งที่ analyze_wave ใส่จริง
+            wb = (((payload.get("levels") or {}).get("elliott") or {}).get("current") or {}).get("weekly_bias")
+            # 2) สำรองจาก weekly_ctx.current
+            if not wb:
+                wc = payload.get("weekly_ctx") or {}
+                cur = wc.get("current") or {}
+                wb = cur.get("weekly_bias") or cur.get("direction")
+            # 3) สำรองจาก meta หรือคีย์บนสุด
+            if not wb:
+                wb = payload.get("weekly_bias") or (payload.get("meta", {}) or {}).get("weekly_bias")
+    except Exception:
+        wb = None
+
+    if isinstance(wb, str):
+        wbl = wb.lower()
+        if wbl in ("up", "bull", "bullish"):
+            return "UP"
+        if wbl in ("down", "bear", "bearish"):
+            return "DOWN"
+    return None
+# --- END PATCH ---

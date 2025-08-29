@@ -110,3 +110,17 @@ class LineDelivery:
 
     def push_text(self, to: str, message: str) -> Tuple[int, str]:
         return push_text(to, message, token=self.token)
+
+# ---------------- Backward-compat alias ----------------
+def broadcast_message(message: str, token: Optional[str] = None):
+    """
+    Backward-compat: เดิมเทสเรียกชื่อ broadcast_message
+    ภายในเรียก broadcast_text เหมือนกันทุกอย่าง
+    """
+    return broadcast_text(message, token=token)
+
+# เพิ่มชื่อเข้า __all__ แบบปลอดภัย
+try:
+    __all__.append("broadcast_message")  # type: ignore[name-defined]
+except Exception:
+    pass
