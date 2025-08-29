@@ -2,7 +2,7 @@
 # =============================================================================
 # Scheduler Runner (Multi-Symbol)
 # ทำหน้าที่:
-# - รันงาน background → ตรวจราคาหลายเหรียญ (Top 10)
+# - ตรวจราคาหลายเหรียญ (TopN อัตโนมัติจาก Binance; ดีฟอลต์ TOP_N=50)
 # - ประเมิน threshold / cooldown / hysteresis
 # - ถ้าถึงเกณฑ์ → ส่งแจ้งเตือนเข้า LINE (broadcast)
 # =============================================================================
@@ -35,10 +35,14 @@ from app.adapters.price_provider import get_price
 # ===== LINE Delivery =====
 from app.adapters.delivery_line import broadcast_message
 
+# ===== ccxt (อาจไม่มีในบางสภาพแวดล้อม) =====
+try:
+    import ccxt  # ใช้ดึง Top-N จาก Binance แบบไม่ต้อง auth
+except Exception:
+    ccxt = None  # fallback จะใช้ลิสต์คงที่
 
-# ===== Top 10 เหรียญที่ติดตามอัตโนมัติ =====
-# ใช้ชื่อสั้น ๆ (BTC, ETH, …) ได้ เดี๋ยวจะ normalize เป็น *USDT ภายหลัง
-TOP10_SYMBOLS = ["BTC", "ETH", "BNB", "SOL", "XRP", "DOGE", "ADA", "AVAX", "TON", "TRX"]
+# ===== Default static fallbacks (ถ้าโหลด Top-N ไม่ได้) =====
+FALLBACK_TOP = ["BTC", "ETH", "BNB", "SOL", "XRP", "DOGE", "ADA", "AVAX", "TON", "TRX"]
 
 
 # ==============================
@@ -57,6 +61,57 @@ def _normalize_symbol_to_usdt(symbol: str) -> str:
         # ไม่เหมาะกับการ alert เปอร์เซ็นต์ราคา ต่อให้ provider รับได้ เราขอข้ามไป
         raise RuntimeError(f"skip stable symbol: {s}")
     return f"{s}USDT"
+
+
+def _load_top_symbols(n: int = 50) -> List[str]:
+    """
+    ดึง Top-N ตาม 24h quote volume ของคู่ *USDT บน Binance
+    - คืนค่าเป็น list ของ base symbols (เช่น ["BTC","ETH",...])
+    - ตัด stablecoins ออก (USDT/USDC/FDUSD/TUSD/BUSD/DAI)
+    - ถ้า ccxt ไม่มี/ล้มเหลว → ใช้ FALLBACK_TOP
+    """
+    STABLES = {"USDT", "USDC", "FDUSD", "TUSD", "BUSD", "DAI"}
+    if ccxt is None:
+        logger.warning("ccxt not available; using FALLBACK_TOP")
+        return FALLBACK_TOP
+    try:
+        ex = ccxt.binance({"enableRateLimit": True})
+        tickers = ex.fetch_tickers()  # {"BTC/USDT": {...}, ...}
+        rows = []
+        for sym, tk in tickers.items():
+            if not sym.endswith("/USDT"):
+                continue
+            base, quote = sym.split("/")
+            if base in STABLES or quote in STABLES:
+                continue
+            qv = tk.get("quoteVolume")
+            if qv is None:
+                info = tk.get("info", {})
+                try:
+                    qv = float(info.get("quoteVolume") or 0.0)
+                except Exception:
+                    qv = 0.0
+            try:
+                qv = float(qv)
+            except Exception:
+                qv = 0.0
+            rows.append((base, qv))
+        rows.sort(key=lambda x: x[1], reverse=True)
+        out, seen = [], set()
+        limit = int(os.getenv("TOP_N", n))
+        for base, _ in rows:
+            if base in seen:
+                continue
+            seen.add(base)
+            out.append(base)
+            if len(out) >= limit:
+                break
+        if not out:
+            logger.warning("no symbols loaded from ccxt; using FALLBACK_TOP")
+        return out or FALLBACK_TOP
+    except Exception as e:
+        logger.exception("load top symbols failed: %s", e)
+        return FALLBACK_TOP
 
 
 async def _aget_numeric_price(symbol_like: str) -> float:
@@ -97,10 +152,11 @@ def _is_alert_enabled() -> bool:
 
 
 def _get_threshold_pct() -> float:
-    # รองรับทั้ง property และคงที่ใน settings
+    # หน่วยเป็น "เปอร์เซ็นต์" (เช่น 3 = 3%)
+    # ดีฟอลต์ 3 แทน 0.03 เพื่อสอดคล้องกับ pct ที่คำนวณ *100 ไว้แล้ว
     return float(
         getattr(alert_settings, "threshold_pct",
-                getattr(alert_settings, "THRESHOLD_PCT", 0.03))
+                getattr(alert_settings, "THRESHOLD_PCT", 3))
     )
 
 
@@ -140,7 +196,7 @@ async def tick_once(symbols: Optional[List[str]] = None, dry_run: bool = False) 
         return
 
     if symbols is None:
-        symbols = TOP10_SYMBOLS
+        symbols = _load_top_symbols(n=int(os.getenv("TOP_N", "50")))
 
     threshold = _get_threshold_pct()
     cooldown = _get_cooldown_sec()
@@ -158,7 +214,7 @@ async def tick_once(symbols: Optional[List[str]] = None, dry_run: bool = False) 
                 logger.info("Baseline set for %s at %.6f", symbol, current_price)
                 continue
 
-            # คำนวณ % การเปลี่ยนแปลง
+            # คำนวณ % การเปลี่ยนแปลง (เป็นหน่วยเปอร์เซ็นต์)
             pct = ((current_price - baseline) / baseline) * 100
 
             ready_by_cooldown = should_alert(
@@ -194,18 +250,20 @@ async def tick_once(symbols: Optional[List[str]] = None, dry_run: bool = False) 
 async def run_scheduler(symbols: Optional[List[str]] = None) -> None:
     poll = _get_poll_seconds()
     if symbols is None:
-        symbols = TOP10_SYMBOLS
+        symbols = _load_top_symbols(n=int(os.getenv("TOP_N", "50")))
 
     logger.info(
-        "Scheduler started: poll every %ds (symbols=%s, threshold=%.2f%%, cooldown=%ds)",
-        poll, symbols, _get_threshold_pct(), _get_cooldown_sec(),
+        "Scheduler started: poll every %ds (symbols=%d loaded, threshold=%.2f%%, cooldown=%ds)",
+        poll, len(symbols), _get_threshold_pct(), _get_cooldown_sec(),
     )
-    try:
-        while True:
+
+    while True:
+        try:
             await tick_once(symbols=symbols, dry_run=False)
-            await asyncio.sleep(poll)
-    except asyncio.CancelledError:
-        logger.info("Scheduler cancelled; shutting down.")
-    except Exception as e:
-        logger.exception("Scheduler encountered an error: %s", e)
+        except asyncio.CancelledError:
+            logger.info("Scheduler cancelled; shutting down.")
+            break
+        except Exception as e:
+            logger.exception("Scheduler encountered an error: %s", e)
+            # ล้มรอบนี้ แต่ยังคงวนรอบถัดไป
         await asyncio.sleep(poll)
