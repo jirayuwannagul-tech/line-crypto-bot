@@ -45,3 +45,4 @@ Thumbs.db
 project_code_only.zip
 project_all_code.zip
 *.zip
+.env
