@@ -1,0 +1,7 @@
+== INTRADAY SUMMARY (2025-08-29 17:40:24) ==
+[5M] BTCUSDT @ 109,904.95  Bias=BEAR  RSI=59.2  ATR%=0.10%  RH=111,279.45 RL=109,414.18
+⏸ WAIT | เงื่อนไขยังไม่ครบ (รอ breakout/breakdown)
+[15M] BTCUSDT @ 109,934.18  Bias=BEAR  RSI=29.8  ATR%=0.25%  RH=112,638.64 RL=109,414.18
+⏸ WAIT | เงื่อนไขยังไม่ครบ (รอ breakout/breakdown)
+[30M] BTCUSDT @ 113,252.00  Bias=BEAR  RSI=85.8  ATR%=0.28%  RH=113,360.00 RL=110,345.42
+⏸ WAIT | เงื่อนไขยังไม่ครบ (รอ breakout/breakdown)
