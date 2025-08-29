@@ -3,7 +3,11 @@
 # LINE Webhook Router
 # -----------------------------------------------------------------------------
 # - รับ Webhook จาก LINE Messaging API
-# - รองรับ keyword reply, ราคา <symbol>, พิมพ์สัญลักษณ์เหรียญตรง ๆ (BTC/ETH/...)
+# - รองรับ:
+#     • ราคา <symbol>     (เช่น "ราคา btc", "ราคา eth")
+#     • พิมพ์สัญลักษณ์   (เช่น "btc", "eth", "BTC/USDT")
+#     • ข้อความอิสระเพื่อ "วิเคราะห์แบบเรียลไทม์"
+#         ตัวอย่าง: "วิเคราะห์ btc 1h", "btc h1", "analyze eth 4H", "xrp 1D"
 # - เก็บ userId ล่าสุด และมีเอ็นด์พอยต์ /debug/* สำหรับทดสอบ push
 # - background loop แจ้งข่าว mock ทุก NEWS_PUSH_EVERY_SEC วินาที (ค่า env)
 # =============================================================================
@@ -21,9 +25,9 @@ from fastapi import APIRouter, Request, HTTPException
 import httpx
 
 # ---- Internal layers
-from app.engine.signal_engine import build_line_text          # วิเคราะห์สัญญาณ
 from app.adapters import price_provider
-from app.features.replies.keyword_reply import get_reply      # keyword layer
+from app.features.replies.keyword_reply import get_reply  # keyword layer
+from app.services.wave_service import analyze_wave, build_brief_message  # วิเคราะห์สด
 
 router = APIRouter()
 log = logging.getLogger(__name__)
@@ -46,7 +50,6 @@ def _ascii_token_from_env() -> str:
     กันกรณีมี zero-width/emoji/BOM หลุดเข้ามา → httpx จะไม่พังที่ normalize_header_value
     """
     raw = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "") or ""
-    # เก็บเฉพาะอักขระที่พิมพ์ได้และอยู่ในช่วง ASCII (<128)
     cleaned = "".join(ch for ch in raw if ch in string.printable and ord(ch) < 128).strip()
     return cleaned
 
@@ -124,34 +127,64 @@ async def stop_news_loop():
         log.info("news loop stopped")
 
 # =============================================================================
-# COMMAND PARSER (สำหรับ analyze)
+# COMMAND PARSER (freeform → symbol/tf แบบยืดหยุ่น)
 # =============================================================================
-_SYM_RE = r"[A-Z0-9:\-/]{3,20}"
+_ALLOWED_TF = {"1M", "5M", "15M", "30M", "1H", "4H", "1D", "1W"}
+_SYMBOL_MAP = {
+    "btc": "BTCUSDT", "eth": "ETHUSDT", "sol": "SOLUSDT", "xrp": "XRPUSDT",
+    "ada": "ADAUSDT", "doge": "DOGEUSDT", "bnb": "BNBUSDT", "sand": "SANDUSDT",
+}
 
-def _parse_text(text: str) -> Dict[str, str]:
-    t = (text or "").strip()
-    t_upper = t.upper()
+def _norm_tf_token(tok: str) -> str:
+    """
+    รองรับ h1→1H, m15→15M, d1→1D, 4h→4H, 30m→30M รวมถึง '1h','15m','1d','1w'
+    """
+    t = (tok or "").strip().lower()
+    t = (t.replace("minutes", "m").replace("minute", "m").replace("mins", "m").replace("min", "m")
+           .replace("hours", "h").replace("hour", "h").replace("hr", "h")
+           .replace("daily", "d").replace("day", "d").replace("week", "w").replace("weekly", "w"))
+    if t and t[0] in "mhdw" and t[1:].isdigit():
+        t = t[1:] + t[0]      # h1 -> 1h, m15 -> 15m, d1 -> 1d
+    t = t.upper()
+    if t in _ALLOWED_TF:
+        return t
+    m = re.match(r"^(\d+)\s*([MHDW])$", t)
+    if m:
+        cand = f"{m.group(1)}{m.group(2)}"
+        if cand in _ALLOWED_TF:
+            return cand
+    return ""
+
+def _parse_symbol_tf_freeform(text: str) -> Dict[str, str]:
+    """
+    ดึง symbol/tf จากข้อความอิสระ:
+      - 'วิเคราะห์ btc 1h', 'btc h1', 'analyze eth 4H', 'xrp 1D', 'doge d1'
+      - ถ้าไม่เจอ tf -> 1D, ถ้าไม่เจอ symbol -> BTCUSDT
+    """
+    s = (text or "").strip().lower()
+
+    # --- symbol ---
     symbol = "BTCUSDT"
+    # รองรับรูปแบบ BTC/USDT, BTC-USDT, BTC:USDT
+    m_pair = re.search(r"\b([a-z]{3,5})\s*[/\-\:]\s*([a-z]{3,5})\b", s, flags=re.I)
+    if m_pair:
+        symbol = f"{m_pair.group(1)}{m_pair.group(2)}".upper()
+    else:
+        for k, v in _SYMBOL_MAP.items():
+            if re.search(rf"\b{k}\b", s):
+                symbol = v
+                break
+
+    # --- timeframe ---
     tf = "1D"
-    profile = "baseline"
+    tokens = re.findall(r"(?:\d+\s*[mhdw]|[mhdw]\s*\d+|\d+\s*[MHDW])", s)
+    for tok in tokens:
+        tf_norm = _norm_tf_token(tok)
+        if tf_norm:
+            tf = tf_norm
+            break
 
-    m_prof = re.search(r"profile:([a-zA-Z0-9_\-]+)", t, flags=re.IGNORECASE)
-    if m_prof:
-        profile = m_prof.group(1).strip()
-
-    m1 = re.search(rf"\banalyze\s+({_SYM_RE})\s+([0-9]+[HDW])\b", t_upper)
-    if m1:
-        symbol = m1.group(1).upper()
-        tf = m1.group(2).upper()
-        return {"symbol": symbol, "tf": tf, "profile": profile}
-
-    m2 = re.search(rf"\b({_SYM_RE})\s+([0-9]+[HDW])\b", t_upper)
-    if m2:
-        symbol = m2.group(1).upper()
-        tf = m2.group(2).upper()
-        return {"symbol": symbol, "tf": tf, "profile": profile}
-
-    return {"symbol": symbol, "tf": tf, "profile": profile}
+    return {"symbol": symbol, "tf": tf}
 
 # =============================================================================
 # WEBHOOK HANDLER
@@ -191,7 +224,7 @@ async def line_webhook(request: Request) -> Dict[str, Any]:
                 else:
                     reply_text = price_provider.get_spot_text_ccxt("BTCUSDT")
 
-            # 2) พิมพ์สัญลักษณ์เหรียญตรง ๆ
+            # 2) พิมพ์สัญลักษณ์เหรียญตรง ๆ → ตอบราคา
             if not reply_text and re.fullmatch(r"[A-Za-z0-9:/\- ]{2,20}", user_text):
                 reply_text = price_provider.get_spot_text_ccxt(user_text)
 
@@ -199,11 +232,14 @@ async def line_webhook(request: Request) -> Dict[str, Any]:
             if not reply_text:
                 reply_text = get_reply(user_text)
 
-            # 4) วิเคราะห์สัญญาณ
+            # 4) วิเคราะห์ "เรียลไทม์" จากข้อความอิสระ (ไม่พึ่งคีย์เวิร์ดคงที่)
             if not reply_text:
-                args = _parse_text(user_text)
-                symbol, tf, profile = args["symbol"], args["tf"], args["profile"]
-                reply_text = build_line_text(symbol, tf, profile=profile)
+                args = _parse_symbol_tf_freeform(user_text)
+                symbol, tf = args["symbol"], args["tf"]
+
+                cfg = {"use_live": True, "live_limit": 500}   # ดึงแท่งสดจาก provider (ccxt/binance)
+                payload = analyze_wave(symbol, tf, cfg=cfg)
+                reply_text = build_brief_message(payload)[:1800]
 
             # ส่งกลับ
             reply_token = ev.get("replyToken")
