@@ -1,3 +1,4 @@
+# app/scheduler/runner.py
 # =============================================================================
 # Scheduler Runner (Multi-Symbol)
 # ทำหน้าที่:
@@ -10,6 +11,7 @@ from __future__ import annotations
 import os
 import asyncio
 import logging
+import inspect
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
@@ -85,7 +87,6 @@ def _is_alert_enabled() -> bool:
     enabled_attr = getattr(alert_settings, "enabled", None)
     if enabled_attr is not None:
         try:
-            # เผื่อบางโปรไฟล์เก็บเป็น str/bool
             return bool(enabled_attr) if isinstance(enabled_attr, bool) else bool(int(enabled_attr))
         except Exception:
             return True
@@ -95,19 +96,54 @@ def _is_alert_enabled() -> bool:
         return True
 
 
+def _get_threshold_pct() -> float:
+    # รองรับทั้ง property และคงที่ใน settings
+    return float(
+        getattr(alert_settings, "threshold_pct",
+                getattr(alert_settings, "THRESHOLD_PCT", 0.03))
+    )
+
+
+def _get_cooldown_sec() -> int:
+    return int(
+        getattr(alert_settings, "cooldown_sec",
+                getattr(alert_settings, "COOLDOWN_SEC", 600))
+    )
+
+
+def _get_poll_seconds() -> int:
+    # ถ้ามี poll_sec ใช้เลย; ไม่มีก็แปลงจาก PRICE_ALERT_INTERVAL_MIN → วินาที
+    v = getattr(alert_settings, "poll_sec", None)
+    if v is not None:
+        return int(v)
+    mins = int(getattr(alert_settings, "PRICE_ALERT_INTERVAL_MIN", 5))
+    return max(1, mins * 60)
+
+
+async def _maybe_await_send(text: str) -> None:
+    """
+    เรียกส่งข้อความ LINE โดยรองรับทั้งฟังก์ชัน sync/async:
+    - ถ้า broadcast_message คืน awaitable → await
+    - ถ้าเป็น sync → เรียกตรง ๆ
+    """
+    ret = broadcast_message(text)
+    if inspect.isawaitable(ret):
+        await ret
+
+
 # ==============================
 # Tick รอบเดียว (หลายเหรียญ)
 # ==============================
 async def tick_once(symbols: Optional[List[str]] = None, dry_run: bool = False) -> None:
-    if not getattr(alert_settings, "enabled", getattr(alert_settings, "ENABLE_PUSH", True)):
+    if not _is_alert_enabled():
         logger.info("Alerts disabled; skip tick.")
         return
 
     if symbols is None:
         symbols = TOP10_SYMBOLS
 
-    threshold = float(alert_settings.threshold_pct)
-    cooldown = int(alert_settings.cooldown_sec)
+    threshold = _get_threshold_pct()
+    cooldown = _get_cooldown_sec()
 
     for symbol in symbols:
         try:
@@ -142,7 +178,7 @@ async def tick_once(symbols: Optional[List[str]] = None, dry_run: bool = False) 
                 if dry_run:
                     logger.info("[DRY-RUN] Would send LINE: %s", text)
                 else:
-                    await broadcast_message(text)
+                    await _maybe_await_send(text)
 
                 mark_alerted(symbol)
                 set_baseline(symbol, current_price)
@@ -156,13 +192,13 @@ async def tick_once(symbols: Optional[List[str]] = None, dry_run: bool = False) 
 # Scheduler loop (หลายเหรียญ)
 # ==============================
 async def run_scheduler(symbols: Optional[List[str]] = None) -> None:
-    poll = int(alert_settings.poll_sec)
+    poll = _get_poll_seconds()
     if symbols is None:
         symbols = TOP10_SYMBOLS
 
     logger.info(
         "Scheduler started: poll every %ds (symbols=%s, threshold=%.2f%%, cooldown=%ds)",
-        poll, symbols, alert_settings.threshold_pct, alert_settings.cooldown_sec,
+        poll, symbols, _get_threshold_pct(), _get_cooldown_sec(),
     )
     try:
         while True:
