@@ -15,7 +15,7 @@ services:
       - key: LINE_USER_ID
         sync: false   # ตั้งค่าใน Dashboard
       - key: PYTHON_VERSION
-        value: 3.11.9   # ใช้ Python 3.11 เสถียรกว่า 3.13
+        value: 3.11.9
 
 cronJobs:
   - name: mtf-scan-5m
@@ -25,14 +25,14 @@ cronJobs:
       - key: PYTHONPATH
         value: "."
       - key: MTA_SYMBOLS
-        value: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,SANDUSDT,MATICUSDT,DOTUSDT,AVAXUSDT,LTCUSDT,LINKUSDT,ATOMUSDT,NEARUSDT,APEUSDT,OPUSDT,ARBUSDT"
+        value: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,SANDUSDT,MATICUSDT,DOTUSDT,AVAXUSDT,LTCUSDT,LINKUSDT,ATOMUSDT,NEARUSDT,APEUSDT,OPUSDT,ARBUSDT,XAUUSDT,EURUSDT,GBPUSDT,USDJPY,USDCAD,AUDUSDT,NZDUSDT"
       - key: MTA_TFS
         value: "5M,15M,30M"
       - key: DRY_RUN
-        value: "0"          # 0 = ส่งจริง, 1 = แค่ log
+        value: "0"          # 0 = ส่งจริง, 1 = log อย่างเดียว
       - key: LOG_LEVEL
         value: "INFO"
       - key: LINE_CHANNEL_ACCESS_TOKEN
-        sync: false         # ตั้งใน Dashboard
+        sync: false
       - key: LINE_USER_ID
-        sync: false         # ตั้งใน Dashboard
+        sync: false
