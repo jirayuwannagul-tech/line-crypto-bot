@@ -23,7 +23,7 @@ from app.routers.line_webhook import (
     stop_news_loop,
 )
 from app.routers.analyze import router as analyze_router
-
+from app.routers.scheduler import router as scheduler_router  # ✅ NEW
 
 # =============================================================================
 # Lifespan (startup/shutdown)
@@ -35,7 +35,6 @@ async def lifespan(app: FastAPI):
     yield
     # shutdown
     await stop_news_loop()
-
 
 # =============================================================================
 # FastAPI factory
@@ -54,11 +53,10 @@ def create_app() -> FastAPI:
     app.include_router(chat_router)
     app.include_router(line_router, prefix="/line")
     app.include_router(analyze_router, prefix="/analyze")
+    app.include_router(scheduler_router)  # ✅ /jobs/*
     return app
 
-
 app = create_app()
-
 
 @app.get("/")
 def index():
@@ -71,5 +69,7 @@ def index():
             "/line/webhook (POST)",
             "/line/debug/push_news (POST)",
             "/analyze/sample",
+            "/jobs/cron-test",
+            "/jobs/tick",
         ],
     }
