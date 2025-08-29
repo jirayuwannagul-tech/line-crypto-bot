@@ -21,7 +21,7 @@ import httpx
 
 # ---- Internal layers
 from app.engine.signal_engine import build_line_text          # วิเคราะห์สัญญาณ
-from app.utils.crypto_price import fetch_price_text_auto      # ดึงราคาพร้อม auto-parse
+from app.adapters import price_provider
 from app.features.replies.keyword_reply import get_reply      # keyword layer
 
 router = APIRouter()
@@ -173,13 +173,13 @@ async def line_webhook(request: Request) -> Dict[str, Any]:
             if user_text.lower().startswith("ราคา"):
                 parts = user_text.split(maxsplit=1)
                 if len(parts) >= 2:
-                    reply_text = fetch_price_text_auto(parts[1])
+                    reply_text = price_provider.get_spot_text_ccxt(parts[1])
                 else:
-                    reply_text = fetch_price_text_auto("BTC")
+                    reply_text = price_provider.get_spot_text_ccxt("BTCUSDT")
 
             # 2) พิมพ์สัญลักษณ์เหรียญตรง ๆ
             if not reply_text and re.fullmatch(r"[A-Za-z0-9:/\- ]{2,20}", user_text):
-                reply_text = fetch_price_text_auto(user_text)
+                reply_text = price_provider.get_spot_text_ccxt(user_text)
 
             # 3) keyword ปกติ
             if not reply_text:
