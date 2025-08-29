@@ -24,6 +24,7 @@ from app.routers.line_webhook import (
 )
 from app.routers.analyze import router as analyze_router
 from app.routers.scheduler import router as scheduler_router  # ✅ NEW
+from app.routers.config import router as config_router        # ✅ ADD: /config/*
 
 # =============================================================================
 # Lifespan (startup/shutdown)
@@ -53,7 +54,8 @@ def create_app() -> FastAPI:
     app.include_router(chat_router)
     app.include_router(line_router, prefix="/line")
     app.include_router(analyze_router, prefix="/analyze")
-    app.include_router(scheduler_router)  # ✅ /jobs/*
+    app.include_router(scheduler_router)   # ✅ /jobs/*
+    app.include_router(config_router)      # ✅ /config/*
     return app
 
 app = create_app()
@@ -71,5 +73,7 @@ def index():
             "/analyze/sample",
             "/jobs/cron-test",
             "/jobs/tick",
+            "/config/ui",                   # ✅ now available
+            "/config/ping"                  # ✅ if implemented
         ],
     }
