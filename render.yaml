@@ -18,7 +18,7 @@ cronJobs:
   # 🔔 สแกนสัญญาณทุก 5 นาที
   - name: intraday-scan-every-5m
     schedule: "*/5 * * * *"
-    command: python jobs/scan_once.py
+    command: bash -lc "cd /opt/render/project/src && python -m jobs.scan_once"
     envVars:
       - key: PYTHONPATH
         value: "."
@@ -28,8 +28,3 @@ cronJobs:
         sync: false
       - key: MTA_SYMBOLS
         value: "BTCUSDT"
-
-  # 🛡️ กันหลับ → ยิง health check web ทุก 5 นาที
-  - name: keepalive
-    schedule: "*/5 * * * *"
-    command: curl -m 5 -sS https://line-crypto-hourly-news.onrender.com/health || true
