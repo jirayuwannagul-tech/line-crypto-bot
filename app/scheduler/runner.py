@@ -24,30 +24,54 @@ from app.utils.state_store import (
     should_alert,
     mark_alerted,
 )
-from app.utils.crypto_price import get_price_usd
+
+# ใช้ provider ใหม่ (sync) แล้วหุ้มด้วย asyncio.to_thread
+from app.adapters.price_provider import get_price
 
 # ===== LINE Delivery =====
 from app.adapters.delivery_line import broadcast_message
 
 
 # ===== Top 10 เหรียญที่ติดตามอัตโนมัติ =====
-TOP10_SYMBOLS = ["BTC","ETH","USDT","BNB","SOL","XRP","USDC","DOGE","ADA","AVAX"]
+# ใช้ชื่อสั้น ๆ (BTC, ETH, …) ได้ เดี๋ยวจะ normalize เป็น *USDT ภายหลัง
+TOP10_SYMBOLS = ["BTC", "ETH", "BNB", "SOL", "XRP", "DOGE", "ADA", "AVAX", "TON", "TRX"]
 
 
 # ==============================
-# Helper: ดึงราคาปัจจุบันเป็น float
+# Helpers
 # ==============================
-async def _aget_numeric_price(symbol: str) -> float:
-    price = await get_price_usd(symbol)
-    if price is None:
-        raise RuntimeError(f"price not available for {symbol}")
-    return float(price)
+def _normalize_symbol_to_usdt(symbol: str) -> str:
+    """
+    แปลงสัญลักษณ์ให้เป็นคู่กับ USDT โดยอัตโนมัติ ถ้าใส่แค่ 'BTC' → 'BTCUSDT'
+    ถ้าเป็นรูปแบบที่ใช้อยู่แล้ว เช่น 'BTCUSDT' หรือ 'BTC/USDT' จะคืนค่าเดิม
+    หมายเหตุ: ถ้าเป็นสเตเบิลเองอย่าง 'USDT' ให้ยกเว้น (ไม่แจ้งเตือน)
+    """
+    s = (symbol or "").strip().upper()
+    if "/" in s or s.endswith("USDT"):
+        return s
+    if s in {"USDT", "USDC"}:
+        # ไม่เหมาะกับการ alert เปอร์เซ็นต์ราคา ต่อให้ provider รับได้ เราขอข้ามไป
+        raise RuntimeError(f"skip stable symbol: {s}")
+    return f"{s}USDT"
+
+
+async def _aget_numeric_price(symbol_like: str) -> float:
+    """
+    ดึงราคาปัจจุบันโดย:
+    - แปลง symbol ให้เป็นคู่ USDT ถ้าจำเป็น
+    - เรียก get_price (sync) ผ่าน asyncio.to_thread เพื่อไม่บล็อก event loop
+    """
+    pair = _normalize_symbol_to_usdt(symbol_like)
+    px = await asyncio.to_thread(get_price, pair)
+    if px is None:
+        raise RuntimeError(f"price not available for {pair}")
+    return float(px)
 
 
 def _format_alert_text(symbol: str, current_price: float, pct_change: float) -> str:
-    """สร้างข้อความแจ้งเตือนสำหรับส่ง LINE"""
+    """สร้างข้อความแจ้งเตือนสำหรับส่ง LINE (อิง USDT)"""
     direction = "↑" if pct_change >= 0 else "↓"
-    return f"[ALERT] {symbol} {direction}{abs(pct_change):.2f}% | Price: {current_price:,.2f} USD"
+    return f"[ALERT] {symbol} {direction}{abs(pct_change):.2f}% | Price: {current_price:,.2f} USDT"
 
 
 # ==============================
@@ -66,7 +90,7 @@ async def tick_once(symbols: Optional[List[str]] = None, dry_run: bool = False) 
 
     for symbol in symbols:
         try:
-            # ดึงราคา
+            # ดึงราคา (จะ auto-normalize เป็น *USDT)
             current_price = await _aget_numeric_price(symbol)
             state = get_state(symbol)
             baseline = state.get("baseline")
