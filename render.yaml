@@ -11,23 +11,28 @@ services:
       - key: PYTHONPATH
         value: "."
       - key: LINE_CHANNEL_ACCESS_TOKEN
-        sync: false   # ตั้งใน Dashboard
+        sync: false   # ตั้งค่าใน Dashboard
       - key: LINE_USER_ID
-        sync: false   # ตั้งใน Dashboard
-      # (แนะนำ) ระบุเวอร์ชัน Python ให้ชัด
+        sync: false   # ตั้งค่าใน Dashboard
       - key: PYTHON_VERSION
-        value: 3.11.9
+        value: 3.11.9   # ใช้ Python 3.11 เสถียรกว่า 3.13
 
 cronJobs:
-  - name: intraday-scan-every-5m
+  - name: mtf-scan-5m
     schedule: "*/5 * * * *"
     command: bash -lc "cd /opt/render/project/src && python -m jobs.scan_once"
     envVars:
       - key: PYTHONPATH
         value: "."
-      - key: LINE_CHANNEL_ACCESS_TOKEN
-        sync: false
-      - key: LINE_USER_ID
-        sync: false
       - key: MTA_SYMBOLS
-        value: "BTCUSDT"
+        value: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,SANDUSDT,MATICUSDT,DOTUSDT,AVAXUSDT,LTCUSDT,LINKUSDT,ATOMUSDT,NEARUSDT,APEUSDT,OPUSDT,ARBUSDT"
+      - key: MTA_TFS
+        value: "5M,15M,30M"
+      - key: DRY_RUN
+        value: "0"          # 0 = ส่งจริง, 1 = แค่ log
+      - key: LOG_LEVEL
+        value: "INFO"
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false         # ตั้งใน Dashboard
+      - key: LINE_USER_ID
+        sync: false         # ตั้งใน Dashboard
