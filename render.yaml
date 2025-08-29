@@ -1,41 +1,43 @@
 # render.yaml
 services:
-  # --- Web API ---
+  # --- Web API (FastAPI/UVicorn) ---
   - type: web
     name: line-crypto-hourly-news
     env: python
     plan: free
-    # อัปเกรด pip ก่อน แล้วค่อยติดตั้ง requirements
     buildCommand: |
       python -m pip install --upgrade pip
       pip install -r requirements.txt
-    startCommand: python -m app.main
+    startCommand: PYTHONPATH=. python -m app.main
     envVars:
       - key: PYTHONPATH
         value: "."
       - key: LINE_CHANNEL_ACCESS_TOKEN
-        sync: false   # ตั้งค่าใน Dashboard
+        sync: false      # ใส่ค่าใน Dashboard → Environment
       - key: LINE_USER_ID
-        sync: false   # ตั้งค่าใน Dashboard
+        sync: false      # ใส่ค่าใน Dashboard → Environment
       - key: PYTHON_VERSION
-        value: 3.11.9   # ล็อกเวอร์ชัน Python 3.11
+        value: 3.11.9
 
 cronJobs:
-  # --- Intraday Scanner ---
+  # --- Intraday Scanner (ทุก 5 นาที) ---
   - name: mtf-scan-5m
     schedule: "*/5 * * * *"
-    command: bash -lc "cd /opt/render/project/src && python -m jobs.scan_once"
+    # บังคับขั้น build ของ Cron ให้ติดตั้ง deps จาก requirements.txt
+    buildCommand: |
+      python -m pip install --upgrade pip
+      pip install -r requirements.txt
+    # Hotfix กันพลาด: ถ้าใน runtime ยังไม่มี deps ให้ลงซ้ำแบบเงียบ ๆ ก่อนรัน
+    command: bash -lc 'cd /opt/render/project/src && (pip show schedule feedparser >/dev/null 2>&1 || pip install -q -r requirements.txt) && PYTHONPATH=. python -m jobs.scan_once'
     envVars:
       - key: PYTHONPATH
         value: "."
-      - key: PYTHON_VERSION
-        value: 3.11.9   # ล็อกเวอร์ชัน Python สำหรับ Cron ด้วย
       - key: MTA_SYMBOLS
-        value: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,SANDUSDT,MATICUSDT,DOTUSDT,AVAXUSDT,LTCUSDT,LINKUSDT,ATOMUSDT,NEARUSDT,APEUSDT,OPUSDT,ARBUSDT,XAUUSDT,EURUSDT,GBPUSDT,USDJPY,USDCAD,AUDUSDT,NZDUSDT"
+        value: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,SANDUSDT"
       - key: MTA_TFS
         value: "5M,15M,30M"
       - key: DRY_RUN
-        value: "0"          # 0 = ส่งจริง, 1 = log อย่างเดียว
+        value: "0"            # 0 = ส่งจริง, 1 = log-only
       - key: LOG_LEVEL
         value: "INFO"
       - key: LINE_CHANNEL_ACCESS_TOKEN
