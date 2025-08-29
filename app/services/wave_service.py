@@ -330,9 +330,13 @@ def analyze_wave(
 def build_brief_message(payload: Dict[str, Any]) -> str:
     """
     แปลง payload -> ข้อความสั้นส่ง LINE
-    - รองรับ weekly bias: แสดงเป็นแท็กในบรรทัดแรก เช่น "[UP 1W]"
-    - ถ้า payload เป็นรูปแบบ scenario เดิม/ใหม่ จะยังคงทำงานได้ปลอดภัย
+    - แสดง context: ราคา, %ขึ้น/ลง/ข้าง, กรอบ H/L, EMA50/200, TP/SL, เหตุผลย่อ
+    - เติม "แผนเทรด 3 แบบ" (A/B/C) โดยใช้ recent_high / recent_low / EMA50 เป็นจุดอ้างอิง
+      A) Short – Breakout      -> Entry = recent_low, TP = -%, SL = +%
+      B) Short – Pullback      -> Entry = EMA50,     TP = -%, SL = +%
+      C) Long  – Plan (backup) -> Entry = recent_high, TP = +%, SL = -%
     """
+    # ---- อ่านค่าหลักจาก payload ----
     sym = payload.get("symbol") or payload.get("meta", {}).get("symbol") or "SYMBOL"
     tf = payload.get("tf") or payload.get("meta", {}).get("tf") or ""
     pct = payload.get("percent") or {}
@@ -350,29 +354,33 @@ def build_brief_message(payload: Dict[str, Any]) -> str:
     except Exception:
         weekly_bias = None
 
+    def _pf(v):
+        if v is None:
+            return "?"
+        try:
+            return f"{float(v):.0f}%"
+        except Exception:
+            return "?"
+
+    # ---- สร้างหัวเรื่อง ----
     tag = ""
     if isinstance(weekly_bias, str) and weekly_bias:
         w = weekly_bias.strip().lower()
         norm = "SIDE" if w.startswith("side") else w.upper()
         tag = f" [{norm} 1W]"
 
-    header = f"[{sym}] Scenario{tag}"
+    header = f"{sym} ({tf})"
     lines: List[str] = [header]
 
-    # ราคา/สถิติ
+    # ---- ราคา / สถิติ ----
     last = payload.get("last") or {}
     px = last.get("close")
     px_txt = _fmt_num(px)
     if px_txt:
         lines.append(f"ราคา: {px_txt}")
 
-    if isinstance(up, (int, float)) or isinstance(down, (int, float)) or isinstance(side, (int, float)):
-        def _pf(v):
-            if v is None: return "?"
-            try:
-                return f"{float(v):.0f}%"
-            except Exception:
-                return "?"
+    # ความน่าจะเป็น
+    if any(v is not None for v in (up, down, side)):
         lines.append(f"ความน่าจะเป็น — ขึ้น {_pf(up)} | ลง {_pf(down)} | ออกข้าง {_pf(side)}")
 
     # กรอบ/EMA
@@ -386,10 +394,10 @@ def build_brief_message(payload: Dict[str, Any]) -> str:
     if ema50_txt and ema200_txt:
         lines.append(f"EMA50 {ema50_txt} / EMA200 {ema200_txt}")
 
-    # TP/SL
+    # TP/SL rule (มาตรฐาน)
     risk = payload.get("risk") or {}
     tp_pct: List[float] = risk.get("tp_pct", [0.03, 0.05, 0.07])
-    sl_pct: float = risk.get("sl_pct", 0.03)
+    sl_pct: float = float(risk.get("sl_pct", 0.03))
     tp_txt = " / ".join([f"{int(t * 100)}%" for t in tp_pct])
     lines.append(f"TP: {tp_txt} | SL: {int(sl_pct * 100)}%")
 
@@ -399,5 +407,60 @@ def build_brief_message(payload: Dict[str, Any]) -> str:
         lines.append("เหตุผลย่อ:")
         for r in rationale[:3]:
             lines.append(f"• {r}")
+
+    # ===== แผนเทรด 3 แบบ =====
+    # helper คำนวณราคา TP/SL จาก entry
+    def _tp_down_list(entry: float, perc_list: List[float]) -> List[str]:
+        return [_fmt_num(entry * (1 - p)) for p in perc_list]
+
+    def _tp_up_list(entry: float, perc_list: List[float]) -> List[str]:
+        return [_fmt_num(entry * (1 + p)) for p in perc_list]
+
+    def _sl_from(entry: float, perc: float, direction: str) -> Optional[str]:
+        if direction == "up":   # SL +%
+            return _fmt_num(entry * (1 + perc))
+        else:                   # SL -%
+            return _fmt_num(entry * (1 - perc))
+
+    # แสดงสรุป bias ด้านบนของแผน
+    prob_line = f"(Weekly = {weekly_bias or 'UNKNOWN'}, {tf} bias ขึ้น/ลง/ข้าง = {_pf(up)}/{_pf(down)}/{_pf(side)})"
+    lines.append("")
+    lines.append(f"แผนเทรดที่แนะนำตอนนี้ {prob_line}")
+
+    # A) Short – Breakout (Entry = recent_low, TP = -%, SL = +%)
+    if isinstance(rl, (int, float)) and not math.isnan(float(rl)):
+        tpA = _tp_down_list(float(rl), tp_pct)
+        slA = _sl_from(float(rl), sl_pct, "up")
+        lines.append("")
+        lines.append("A) Short – Breakout (ปลอดภัยกว่า)")
+        lines.append(f"Entry: หลุด { _fmt_num(float(rl)) }")
+        if all(tpA):
+            lines.append(f"TP1 −{int(tp_pct[0]*100)}%: {tpA[0]} | TP2 −{int(tp_pct[1]*100)}%: {tpA[1]} | TP3 −{int(tp_pct[2]*100)}%: {tpA[2]}")
+        if slA:
+            lines.append(f"SL +{int(sl_pct*100)}%: {slA}")
+
+    # B) Short – Pullback (Entry = EMA50, TP = -%, SL = +%)
+    if isinstance(ema50, (int, float)) and not math.isnan(float(ema50)):
+        tpB = _tp_down_list(float(ema50), tp_pct)
+        slB = _sl_from(float(ema50), sl_pct, "up")
+        lines.append("")
+        lines.append("B) Short – Pullback (เชิงรุก/RR ดีกว่า)")
+        lines.append(f"Entry: รีเจ็กต์แถว EMA50 = { _fmt_num(float(ema50)) }")
+        if all(tpB):
+            lines.append(f"TP1 −{int(tp_pct[0]*100)}%: {tpB[0]} | TP2 −{int(tp_pct[1]*100)}%: {tpB[1]} | TP3 −{int(tp_pct[2]*100)}%: {tpB[2]}")
+        if slB:
+            lines.append(f"SL +{int(sl_pct*100)}%: {slB}")
+
+    # C) Long – Plan สำรอง (Entry = recent_high, TP = +%, SL = -%)
+    if isinstance(rh, (int, float)) and not math.isnan(float(rh)):
+        tpC = _tp_up_list(float(rh), tp_pct)
+        slC = _sl_from(float(rh), sl_pct, "down")
+        lines.append("")
+        lines.append("C) Long – แผนสำรอง (ถ้ากลับตัวแรง)")
+        lines.append(f"Entry: ทะลุ Recent High = { _fmt_num(float(rh)) }")
+        if all(tpC):
+            lines.append(f"TP1 +{int(tp_pct[0]*100)}%: {tpC[0]} | TP2 +{int(tp_pct[1]*100)}%: {tpC[1]} | TP3 +{int(tp_pct[2]*100)}%: {tpC[2]}")
+        if slC:
+            lines.append(f"SL −{int(sl_pct*100)}%: {slC}")
 
     return "\n".join(lines)

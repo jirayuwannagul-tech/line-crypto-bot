@@ -6,6 +6,8 @@
 # - ถ้าถึงเกณฑ์ → ส่งแจ้งเตือนเข้า LINE (broadcast)
 # =============================================================================
 
+from __future__ import annotations
+import os
 import asyncio
 import logging
 from typing import List, Optional
@@ -74,12 +76,31 @@ def _format_alert_text(symbol: str, current_price: float, pct_change: float) -> 
     return f"[ALERT] {symbol} {direction}{abs(pct_change):.2f}% | Price: {current_price:,.2f} USDT"
 
 
+def _is_alert_enabled() -> bool:
+    """
+    รองรับทั้งกรณีที่ AlertSettings มีหรือไม่มีฟิลด์ enabled:
+    - ถ้ามี: ใช้ค่าจาก settings
+    - ถ้าไม่มี: อ่าน ENV ALERT_ENABLED (ค่าเริ่มต้น = 1 → เปิด)
+    """
+    enabled_attr = getattr(alert_settings, "enabled", None)
+    if enabled_attr is not None:
+        try:
+            # เผื่อบางโปรไฟล์เก็บเป็น str/bool
+            return bool(enabled_attr) if isinstance(enabled_attr, bool) else bool(int(enabled_attr))
+        except Exception:
+            return True
+    try:
+        return bool(int(os.getenv("ALERT_ENABLED", "1")))
+    except Exception:
+        return True
+
+
 # ==============================
 # Tick รอบเดียว (หลายเหรียญ)
 # ==============================
 async def tick_once(symbols: Optional[List[str]] = None, dry_run: bool = False) -> None:
-    if not alert_settings.enabled:
-        logger.debug("Alert is disabled; skip tick.")
+    if not _is_alert_enabled():
+        logger.info("Alerts disabled; skip tick.")
         return
 
     if symbols is None:
