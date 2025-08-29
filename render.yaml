@@ -5,7 +5,10 @@ services:
     name: line-crypto-hourly-news
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt
+    # อัปเกรด pip ก่อน แล้วค่อยติดตั้ง requirements
+    buildCommand: |
+      python -m pip install --upgrade pip
+      pip install -r requirements.txt
     startCommand: python -m app.main
     envVars:
       - key: PYTHONPATH
@@ -15,15 +18,18 @@ services:
       - key: LINE_USER_ID
         sync: false   # ตั้งค่าใน Dashboard
       - key: PYTHON_VERSION
-        value: 3.11.9
+        value: 3.11.9   # ล็อกเวอร์ชัน Python 3.11
 
 cronJobs:
+  # --- Intraday Scanner ---
   - name: mtf-scan-5m
     schedule: "*/5 * * * *"
     command: bash -lc "cd /opt/render/project/src && python -m jobs.scan_once"
     envVars:
       - key: PYTHONPATH
         value: "."
+      - key: PYTHON_VERSION
+        value: 3.11.9   # ล็อกเวอร์ชัน Python สำหรับ Cron ด้วย
       - key: MTA_SYMBOLS
         value: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,SANDUSDT,MATICUSDT,DOTUSDT,AVAXUSDT,LTCUSDT,LINKUSDT,ATOMUSDT,NEARUSDT,APEUSDT,OPUSDT,ARBUSDT,XAUUSDT,EURUSDT,GBPUSDT,USDJPY,USDCAD,AUDUSDT,NZDUSDT"
       - key: MTA_TFS
