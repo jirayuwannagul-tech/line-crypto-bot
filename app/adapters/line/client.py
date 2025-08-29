@@ -50,7 +50,8 @@ def _headers(token: str) -> Dict[str, str]:
 
 def _post(url: str, headers: Dict[str, str], body: Dict[str, Any]) -> httpx.Response:
     with httpx.Client(timeout=15.0) as cli:
-        return cli.post(url, headers=headers, content=json.dumps(body, ensure_ascii=False))
+        # ใช้ json=body เพื่อให้ httpx จัดการ UTF-8 เอง ป้องกัน UnicodeEncodeError
+        return cli.post(url, headers=headers, json=body)
 
 def push_text(text: str, *, to: Optional[str] = None) -> Dict[str, Any]:
     """
