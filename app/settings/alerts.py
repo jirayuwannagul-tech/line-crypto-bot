@@ -21,29 +21,28 @@ class AlertSettings:
             "LINKUSDT",
         ]
     )
+
     # interval สำหรับเช็กแจ้งเตือน (นาที)
     PRICE_ALERT_INTERVAL_MIN: int = 5
 
     # เปิด/ปิด push notification (ชื่อหลัก)
     ENABLE_PUSH: bool = True
 
-    # เกณฑ์เปอร์เซ็นต์เปลี่ยนแปลง (เชิงสัมบูรณ์) สำหรับทริกเกอร์แจ้งเตือน
-    # 0.03 = 3%
+    # เกณฑ์เปอร์เซ็นต์เปลี่ยนแปลงเพื่อทริกเกอร์แจ้งเตือน (เชิงสัมบูรณ์) — 0.03 = 3%
     THRESHOLD_PCT: float = 0.03
 
-    # ฮิสเทอรีซิส: ต้องถอยกลับเข้ามาในโซนปลอดภัยเท่าใดจึงจะ “re-arm”
-    # 0.005 = 0.5%
+    # ฮิสเทอรีซิสกันเด้งซ้ำเร็ว ๆ — 0.005 = 0.5%
     HYSTERESIS_PCT: float = 0.005
 
     # คูลดาวน์ระหว่างการแจ้งเตือนของสัญลักษณ์เดียวกัน (วินาที)
     COOLDOWN_SEC: int = 600
 
-    # ✅ alias ใช้แทน .enabled ได้ (กัน error โค้ดเก่า)
+    # ✅ alias ใช้แทน .enabled ได้ (กันโค้ดเก่า)
     @property
     def enabled(self) -> bool:
         return self.ENABLE_PUSH
 
-    # ✅ alias สำหรับโค้ดที่เรียกใช้ชื่อเล็ก
+    # ✅ aliases สำหรับโค้ดที่อ้างชื่อเล็ก
     @property
     def threshold_pct(self) -> float:
         return self.THRESHOLD_PCT
