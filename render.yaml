@@ -15,7 +15,6 @@ services:
         sync: false   # กำหนดใน Dashboard
 
 cronJobs:
-  # 🔔 สแกนสัญญาณทุก 5 นาที
   - name: intraday-scan-every-5m
     schedule: "*/5 * * * *"
     command: bash -lc "cd /opt/render/project/src && python -m jobs.scan_once"
