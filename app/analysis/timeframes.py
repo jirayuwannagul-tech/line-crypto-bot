@@ -332,6 +332,7 @@ def get_data(
     xlsx_path: Optional[str] = None,
     engine: str = "openpyxl",
 ) -> pd.DataFrame:
+    from app.analysis.timeframes import _fetch_from_providers
     """
     Load OHLCV data.
 
