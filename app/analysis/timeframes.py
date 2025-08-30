@@ -6,7 +6,7 @@ import math
 import time
 import asyncio
 from typing import Literal, Optional, Sequence, List, Tuple, Dict
-from app.analysis.timeframes import get_data
+from app.analysis.data_loader import get_data
 help(get_data)
 
 
