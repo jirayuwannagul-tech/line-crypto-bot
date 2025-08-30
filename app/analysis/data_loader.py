@@ -27,7 +27,7 @@ def get_data(symbol: str, timeframe: str, limit: int = 100):
         df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'quote_asset_volume', 'number_of_trades', 'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'])
         
         # แปลงเวลาเป็นวันที่
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df['timestamp'] = df['timestamp'].dt.isoformat()
         
         return df
     else:

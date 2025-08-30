@@ -1,11 +1,12 @@
 from __future__ import annotations
 import pandas as pd
 from typing import List, Dict, Literal
+import sys
 
-Direction = Literal["UP","DOWN"]
+Direction = Literal["UP", "DOWN"]
 
 def _pct_change(a: float, b: float) -> float:
-    if a == 0: 
+    if a == 0:
         return 0.0
     return (b - a) / a
 
@@ -25,6 +26,9 @@ def detect_zigzag(
 
     ts = df["timestamp"].tolist()
     px = df[price_col].tolist()
+
+    # แปลง timestamp เป็น string ก่อนที่เราจะใช้หรือแปลงเป็น JSON
+    df['timestamp'] = df['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
 
     # เริ่มจากจุดแรก (กำหนดทิศทางเริ่มตามการเปลี่ยนแปลงครั้งแรกที่เกิน pct)
     i0 = 0
@@ -108,14 +112,3 @@ def detect_zigzag(
         })
 
     return segments
-
-if __name__ == "__main__":
-    # ตัวอย่างการใช้งานแบบสั้น (ทดสอบเร็ว)
-    import sys
-    path = sys.argv[1] if len(sys.argv) > 1 else "data/mtf/BTCUSDT_1D_overlap.csv"
-    tf = path.split("_")[-2] if "_" in path else "1D"
-    df = pd.read_csv(path, parse_dates=["timestamp"])
-    segs = detect_zigzag(df, pct=0.03, min_bars=5)
-    print(f"{tf} segments: {len(segs)} ตัวอย่าง 5 รายการแรก:")
-    for s in segs[:5]:
-        print(s)
