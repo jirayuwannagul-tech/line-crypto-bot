@@ -1,0 +1,59 @@
+{
+  "symbol": "BTCUSDT",
+  "tf": "1D",
+  "generated_at": "2025-08-29T19:00:00+07:00",
+  "context": {
+    "weekly_bias": "DOWN",
+    "last_price": 110732.41,
+    "percent": { "up": 34, "down": 63, "side": 3 },
+    "levels": {
+      "recent_high": 124474.00,
+      "recent_low": 108666.66,
+      "ema50": 114237.14,
+      "ema200": 104060.08
+    }
+  },
+  "elliott": {
+    "pattern": "Impulse",
+    "direction": "UP",
+    "wave_label": "Impulse UP",
+    "subwaves": ["i", "ii", "iii", "iv", "v"],
+    "progress": "iii?",
+    "invalidation": {
+      "ii_above_i_start": false,
+      "iv_overlap_i": false,
+      "iii_shortest": false
+    }
+  },
+  "correction": {
+    "expected": "ABC",
+    "types_possible": ["Zigzag", "Flat", "Triangle"],
+    "fib_relations": {
+      "C_vs_A": [1.0, 1.272, 1.618],
+      "B_retracement": [0.382, 0.618]
+    }
+  },
+  "trade_plan": {
+    "A_short_breakout": {
+      "entry_below": 108666.66,
+      "sl": 111926.66,
+      "tps": [105406.66, 103233.33, 101059.99]
+    },
+    "B_short_pullback": {
+      "entry_near": 114237.14,
+      "sl": 117664.26,
+      "tps": [110810.03, 108525.28, 106240.54]
+    },
+    "C_long_backup": {
+      "entry_above": 124474.00,
+      "sl": 120739.78,
+      "tps": [128208.22, 130697.70, 133187.18]
+    }
+  },
+  "rationale": [
+    "Dow DOWN (conf=50)",
+    "Elliott Impulse UP — subwaves: i–ii–iii–iv–v",
+    "Weekly context: DOWN bias"
+  ],
+  "meta": { "source": "mock", "version": "1.0" }
+}
