@@ -25,20 +25,13 @@ __all__ = ["tick_once", "TOP10_SYMBOLS"]
 
 
 def tick_once(symbols: Optional[list[str]] = None, dry_run: bool = False) -> Dict[str, Any]:
+    """Run one stateless tick (Cloud Scheduler)."""
     tf = os.getenv("JOB_TF","1D")
     use_live = os.getenv("JOB_USE_LIVE","true").lower()=="true"
     live_limit = int(os.getenv("JOB_LIVE_LIMIT","500"))
     logger.info("[tick_once] cfg tf=%s use_live=%s live_limit=%d symbols=%s dry_run=%s", tf, use_live, live_limit, symbols, dry_run)
-    """
-    เรียกวิเคราะห์ 1 รอบแบบ stateless (ใช้กับ Cloud Scheduler)
-    :param symbols: เช่น ["BTCUSDT","ETHUSDT"]; ถ้าไม่ส่งจะใช้ TOP10_SYMBOLS[:1] (BTCUSDT)
-    :param dry_run: True = วิเคราะห์อย่างเดียว ไม่ push LINE
-    :return: dict per symbol: {payload, message} หรือ {error}
-    """
-    results: Dict[str, Any] = {}
-    syms = symbols or [TOP10_SYMBOLS[0]]  # default = BTCUSDT
-
-    cfg = {"use_live": use_live, "live_limit": live_limit}
+    """Run one stateless tick (Cloud Scheduler)."""
+    # :param symbols: เช่น ["BTCUSDT","ETHUSDT"]; ถ้าไม่ส่งจะใช้ TOP10_SYMBOLS[:1] (BTCUSDT)
 
     for sym in syms:
         try:
