@@ -5,7 +5,6 @@ import logging
 
 from app.services.wave_service import analyze_wave, build_brief_message
 import os
-import logging
 logger = logging.getLogger("app.scheduler.runner")
 
 # ✅ ให้ tests/features/alerts/test_alert.py import ได้
@@ -29,9 +28,12 @@ def tick_once(symbols: Optional[list[str]] = None, dry_run: bool = False) -> Dic
     results: Dict[str, Any] = {}
     syms = symbols or [TOP10_SYMBOLS[0]]  # default = BTCUSDT
 
+    tf = os.getenv("JOB_TF", "1D")
+    use_live = os.getenv("JOB_USE_LIVE","true").lower()=="true"
+    live_limit = int(os.getenv("JOB_LIVE_LIMIT","500"))
     for sym in syms:
         try:
-            payload = analyze_wave(sym, os.getenv("JOB_TF","1D"), cfg={"use_live": os.getenv("JOB_USE_LIVE","true").lower()=="true", "live_limit": int(os.getenv("JOB_LIVE_LIMIT","500"))})
+            payload = analyze_wave(sym, tf, cfg={"use_live": use_live, "live_limit": live_limit}), cfg={"use_live": os.getenv("JOB_USE_LIVE","true").lower()=="true", "live_limit": int(os.getenv("JOB_LIVE_LIMIT","500"))})
             msg = build_brief_message(payload)
             logger.info("[tick_once] %s tf=%s -> %s", sym, tf, (msg or "")[:160])
             results[sym] = {"payload": payload, "message": msg}
