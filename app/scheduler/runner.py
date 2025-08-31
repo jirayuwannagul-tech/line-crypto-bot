@@ -8,6 +8,12 @@ from app.services.wave_service import analyze_wave, build_brief_message
 
 # ใช้ชื่อ logger เดียวตรงไปตรงมา
 logger = logging.getLogger("app.scheduler.runner")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+    logger.addHandler(_h)
+logger.propagate = True
 
 # ✅ ให้ tests/features/alerts/test_alert.py import ได้
 TOP10_SYMBOLS: list[str] = [
