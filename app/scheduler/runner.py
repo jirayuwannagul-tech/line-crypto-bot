@@ -4,6 +4,7 @@ from typing import Optional, Dict, Any
 import logging
 
 from app.services.wave_service import analyze_wave, build_brief_message
+import os
 
 # ✅ ให้ tests/features/alerts/test_alert.py import ได้
 TOP10_SYMBOLS: list[str] = [
@@ -28,7 +29,7 @@ def tick_once(symbols: Optional[list[str]] = None, dry_run: bool = False) -> Dic
 
     for sym in syms:
         try:
-            payload = analyze_wave(sym, "1H")
+            payload = analyze_wave(sym, os.getenv("JOB_TF","1D"), cfg={"use_live": os.getenv("JOB_USE_LIVE","true").lower()=="true", "live_limit": int(os.getenv("JOB_LIVE_LIMIT","500"))})
             msg = build_brief_message(payload)
             results[sym] = {"payload": payload, "message": msg}
             if not dry_run:
