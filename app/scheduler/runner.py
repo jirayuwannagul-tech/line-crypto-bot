@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from typing import Optional, Dict, Any
-import os
 import logging
+import os
 
 from app.services.wave_service import analyze_wave, build_brief_message
 
-# Logger สำหรับโมดูลนี้
+# ใช้ชื่อ logger เดียวตรงไปตรงมา
 logger = logging.getLogger("app.scheduler.runner")
 
 # ✅ ให้ tests/features/alerts/test_alert.py import ได้
@@ -19,6 +19,10 @@ __all__ = ["tick_once", "TOP10_SYMBOLS"]
 
 
 def tick_once(symbols: Optional[list[str]] = None, dry_run: bool = False) -> Dict[str, Any]:
+    tf = os.getenv("JOB_TF","1D")
+    use_live = os.getenv("JOB_USE_LIVE","true").lower()=="true"
+    live_limit = int(os.getenv("JOB_LIVE_LIMIT","500"))
+    logger.info("[tick_once] cfg tf=%s use_live=%s live_limit=%d symbols=%s dry_run=%s", tf, use_live, live_limit, symbols, dry_run)
     """
     เรียกวิเคราะห์ 1 รอบแบบ stateless (ใช้กับ Cloud Scheduler)
     :param symbols: เช่น ["BTCUSDT","ETHUSDT"]; ถ้าไม่ส่งจะใช้ TOP10_SYMBOLS[:1] (BTCUSDT)
@@ -30,25 +34,25 @@ def tick_once(symbols: Optional[list[str]] = None, dry_run: bool = False) -> Dic
 
     tf = os.getenv("JOB_TF", "1D")
     use_live = os.getenv("JOB_USE_LIVE", "true").lower() == "true"
-    live_limit = int(os.getenv("JOB_LIVE_LIMIT", "500"))
+    try:
+        live_limit = int(os.getenv("JOB_LIVE_LIMIT", "500"))
+    except ValueError:
+        live_limit = 500
 
-    # กำหนด config หนึ่งครั้ง ใช้ร่วมกันได้
     cfg = {"use_live": use_live, "live_limit": live_limit}
-
-    logger.info("[tick_once] cfg tf=%s use_live=%s live_limit=%d symbols=%s",
-                tf, use_live, live_limit, ",".join(syms))
 
     for sym in syms:
         try:
-            payload = analyze_wave(sym, tf, cfg=cfg)
+            # 🔧 แก้ syntax: ตัด , cfg=... ชุดที่ซ้ำออก
+            payload = analyze_wave(sym, tf, cfg={"use_live": use_live, "live_limit": live_limit})
             msg = build_brief_message(payload)
             logger.info("[tick_once] %s tf=%s -> %s", sym, tf, (msg or "")[:160])
 
             results[sym] = {"payload": payload, "message": msg}
 
             if not dry_run:
-                # TODO: ภายหลังต่อ notifier เพื่อ push LINE จริง
-                logger.info("[tick_once] would push -> %s", msg)
+                # ปลอดภัยไว้ก่อน: log แทนการ push จริง (จะต่อ notifier ภายหลัง)
+                logger.info("[tick_once] push (stub) %s -> %s", sym, (msg or "")[:160])
         except Exception as e:
             logger.exception("[tick_once] error for %s", sym)
             results[sym] = {"error": str(e)}
