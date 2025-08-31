@@ -35,5 +35,5 @@ async def tick(
     if symbols:
         sym_list = [s.strip() for s in symbols.split(",") if s.strip()]
     # เรียก tick_once 1 รอบ แล้วจบ
-    await tick_once(symbols=sym_list, dry_run=dry_run)
+    result = tick_once(symbols=sym_list, dry_run=dry_run)
     return {"ok": True, "ran": True, "symbols": sym_list or "TOP10", "dry_run": dry_run}
