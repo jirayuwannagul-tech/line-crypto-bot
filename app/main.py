@@ -23,8 +23,9 @@ from app.routers.line_webhook import (
     stop_news_loop,
 )
 from app.routers.analyze import router as analyze_router
-from app.routers.scheduler import router as scheduler_router  # ✅ NEW
-from app.routers.config import router as config_router        # ✅ ADD: /config/*
+from app.routers.scheduler import router as scheduler_router  # ✅ /jobs/*
+from app.routers.config import router as config_router        # ✅ /config/*
+from app.routers import line as line_broadcast_router         # ✅ เพิ่ม broadcast routes
 
 # =============================================================================
 # Lifespan (startup/shutdown)
@@ -52,7 +53,8 @@ def create_app() -> FastAPI:
     # รวม router ต่าง ๆ
     app.include_router(health_router)
     app.include_router(chat_router)
-    app.include_router(line_router, prefix="/line")
+    app.include_router(line_router, prefix="/line")           # webhook routes
+    app.include_router(line_broadcast_router, prefix="/line") # ✅ broadcast routes
     app.include_router(analyze_router, prefix="/analyze")
     app.include_router(scheduler_router)   # ✅ /jobs/*
     app.include_router(config_router)      # ✅ /config/*
@@ -69,11 +71,12 @@ def index():
             "/docs",
             "/chat (POST)",
             "/line/webhook (POST)",
+            "/line/broadcast (POST)",        # ✅ เพิ่มตัวนี้
             "/line/debug/push_news (POST)",
             "/analyze/sample",
             "/jobs/cron-test",
             "/jobs/tick",
-            "/config/ui",                   # ✅ now available
-            "/config/ping"                  # ✅ if implemented
+            "/config/ui",
+            "/config/ping",
         ],
     }
