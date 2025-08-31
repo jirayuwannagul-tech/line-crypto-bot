@@ -32,6 +32,13 @@ def tick_once(symbols: Optional[list[str]] = None, dry_run: bool = False) -> Dic
     results: Dict[str, Any] = {}
     syms = symbols or [TOP10_SYMBOLS[0]]  # default = BTCUSDT
 
+    tf = os.getenv("JOB_TF", "1D")
+    use_live = os.getenv("JOB_USE_LIVE", "true").lower() == "true"
+    try:
+        live_limit = int(os.getenv("JOB_LIVE_LIMIT", "500"))
+    except ValueError:
+        live_limit = 500
+
     cfg = {"use_live": use_live, "live_limit": live_limit}
 
     for sym in syms:
@@ -39,7 +46,7 @@ def tick_once(symbols: Optional[list[str]] = None, dry_run: bool = False) -> Dic
             # 🔧 แก้ syntax: ตัด , cfg=... ชุดที่ซ้ำออก
             payload = analyze_wave(sym, tf, cfg={"use_live": use_live, "live_limit": live_limit})
             msg = build_brief_message(payload)
-            logger.info("[tick_once] %s -> %s", sym, (msg or "")[:160])
+            logger.info("[tick_once] %s tf=%s -> %s", sym, tf, (msg or "")[:160])
 
             results[sym] = {"payload": payload, "message": msg}
 
