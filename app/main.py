@@ -25,7 +25,7 @@ from app.routers.line_webhook import (
 from app.routers.analyze import router as analyze_router
 from app.routers.scheduler import router as scheduler_router  # ✅ /jobs/*
 from app.routers.config import router as config_router        # ✅ /config/*
-from app.routers import line as line_broadcast_router         # ✅ เพิ่ม broadcast routes
+from app.routers.line import router as line_broadcast_router         # ✅ เพิ่ม broadcast routes
 
 # =============================================================================
 # Lifespan (startup/shutdown)
