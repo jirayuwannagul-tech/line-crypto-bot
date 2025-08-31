@@ -1,8 +1,3 @@
-# -----------------------------------------------------------------------------
-# Orchestrator for wave analysis pipeline.
-# Load data -> compute scenarios (Dow + Elliott + Fibo + Indicators) -> payload.
-# + Elliott RULES + FRACTAL bundle (data-driven) merged in.
-# -----------------------------------------------------------------------------
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
