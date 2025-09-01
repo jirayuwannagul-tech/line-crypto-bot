@@ -61,7 +61,7 @@ class BroadcastBody(BaseModel):
 # LAYER D) ROUTES
 # =============================================================================
 
-@router.get("/line/health")
+@router.get("/health")
 def line_health() -> Dict[str, Any]:
     """
     Ping health — ตรวจสอบว่าสามารถสร้าง client ได้
@@ -75,7 +75,7 @@ def line_health() -> Dict[str, Any]:
         log.exception("health error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/line/push")
+@router.post("/push")
 def line_push(body: PushBody) -> Dict[str, Any]:
     """
     ส่งข้อความไปยังผู้ใช้/ห้อง/กลุ่ม แบบ push
@@ -90,7 +90,7 @@ def line_push(body: PushBody) -> Dict[str, Any]:
         log.exception("push error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/line/broadcast")
+@router.post("/broadcast")
 def line_broadcast(body: BroadcastBody) -> Dict[str, Any]:
     """
     กระจายข้อความไปยังผู้ติดตามทั้งหมด (ระวัง quota จาก LINE)
