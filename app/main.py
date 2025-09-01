@@ -6,11 +6,15 @@ from __future__ import annotations
 # =============================================================================
 from dotenv import load_dotenv, find_dotenv
 import os
+
 env_path = find_dotenv(usecwd=True)
 if not env_path or not os.path.exists(env_path):
     env_path = ".env"
 load_dotenv(env_path)
 
+# =============================================================================
+# Imports
+# =============================================================================
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 
@@ -25,7 +29,7 @@ from app.routers.line_webhook import (
 from app.routers.analyze import router as analyze_router
 from app.routers.scheduler import router as scheduler_router  # ✅ /jobs/*
 from app.routers.config import router as config_router        # ✅ /config/*
-from app.routers.line import router as line_broadcast_router         # ✅ เพิ่ม broadcast routes
+from app.routers.line import router as line_broadcast_router  # ✅ /line/broadcast
 
 # =============================================================================
 # Lifespan (startup/shutdown)
@@ -34,9 +38,11 @@ from app.routers.line import router as line_broadcast_router         # ✅ เ�
 async def lifespan(app: FastAPI):
     # startup
     await start_news_loop()
-    yield
-    # shutdown
-    await stop_news_loop()
+    try:
+        yield
+    finally:
+        # shutdown
+        await stop_news_loop()
 
 # =============================================================================
 # FastAPI factory
@@ -50,18 +56,23 @@ def create_app() -> FastAPI:
         openapi_url="/openapi.json",
         lifespan=lifespan,
     )
+
     # รวม router ต่าง ๆ
     app.include_router(health_router)
     app.include_router(chat_router)
-    app.include_router(line_router, prefix="/line")           # webhook routes
-    app.include_router(line_broadcast_router, prefix="/line") # ✅ broadcast routes
+    app.include_router(line_router, prefix="/line")            # webhook routes
+    app.include_router(line_broadcast_router, prefix="/line")  # ✅ broadcast routes
     app.include_router(analyze_router, prefix="/analyze")
     app.include_router(scheduler_router)   # ✅ /jobs/*
     app.include_router(config_router)      # ✅ /config/*
+
     return app
 
 app = create_app()
 
+# =============================================================================
+# Index
+# =============================================================================
 @app.get("/")
 def index():
     return {
@@ -71,11 +82,7 @@ def index():
             "/docs",
             "/chat (POST)",
             "/line/webhook (POST)",
-            "/line/broadcast (POST)",        # ✅ เพิ่มตัวนี้
-            "/line/debug/push_news (POST)
-from app.routers.line_push import bp as line_push_bp
-app.register_blueprint(line_push_bp)
-",
+            "/line/broadcast (POST)",   # ✅ broadcast endpoint
             "/analyze/sample",
             "/jobs/cron-test",
             "/jobs/tick",
