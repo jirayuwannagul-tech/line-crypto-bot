@@ -44,6 +44,7 @@ def tick_once(symbols: Optional[list[str]] = None, dry_run: bool = False) -> Dic
         try:
             # 🔧 แก้ syntax: ตัด , cfg=... ชุดที่ซ้ำออก
             payload = analyze_wave(sym, tf, cfg={"use_live": use_live, "live_limit": live_limit})
+
             msg = build_brief_message(payload)
             logger.info("[tick_once] %s -> %s", sym, (msg or "")[:160])
 
