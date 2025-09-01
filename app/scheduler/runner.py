@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import Optional, Dict, Any
 import logging
 import os
+from datetime import datetime, timezone
+from app.services.idempotency import seen
+
 
 from app.services.wave_service import analyze_wave, build_brief_message
 
@@ -39,6 +42,18 @@ def tick_once(symbols: Optional[list[str]] = None, dry_run: bool = False) -> Dic
     syms = symbols or [TOP10_SYMBOLS[0]]  # default = BTCUSDT
 
     cfg = {"use_live": use_live, "live_limit": live_limit}
+
+    # ✅ เพิ่มบล็อกนี้
+    now = datetime.now(timezone.utc)
+    bucket_min = (now.minute // 2) * 2
+    sym_key = ",".join(syms)
+    bucket_key = f"tick:{tf}:{sym_key}:{now.hour:02d}:{bucket_min:02d}"
+    if seen(bucket_key, ttl_sec=120):
+        logger.info("[tick_once] skip duplicated bucket key=%s", bucket_key)
+        return {}
+
+
+    
 
     for sym in syms:
         try:
