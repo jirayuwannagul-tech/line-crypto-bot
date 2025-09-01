@@ -38,15 +38,15 @@ CHANNEL_ACCESS_TOKEN = _env("LINE_CHANNEL_ACCESS_TOKEN")
 CHANNEL_SECRET = _env("LINE_CHANNEL_SECRET")
 
 _client_singleton: Optional[LineDelivery] = None
-def _get_get_client() -> LineDelivery:
-    global _client_singleton, CHANNEL_ACCESS_TOKEN, CHANNEL_SECRET_singleton, CHANNEL_ACCESS_TOKEN, CHANNEL_SECRET
+def _get_client() -> LineDelivery:
+    global _client_singleton, CHANNEL_ACCESS_TOKEN, CHANNEL_SECRET
     CHANNEL_ACCESS_TOKEN = _env('LINE_CHANNEL_ACCESS_TOKEN')
     CHANNEL_SECRET = _env('LINE_CHANNEL_SECRET')
     if _client_singleton is None:
         if not CHANNEL_ACCESS_TOKEN or not CHANNEL_SECRET:
             raise HTTPException(status_code=400, detail="LINE credentials missing in ENV.")
         _client_singleton = LineDelivery(CHANNEL_ACCESS_TOKEN, CHANNEL_SECRET)
-    return _client_singleton_singleton
+    return _client_singleton
 
 # =============================================================================
 # LAYER C) SCHEMAS
@@ -98,7 +98,7 @@ def line_broadcast(body: BroadcastBody) -> Dict[str, Any]:
     กระจายข้อความไปยังผู้ติดตามทั้งหมด (ระวัง quota จาก LINE)
     """
     try:
-        _get_get_client().broadcast_text(body.text)
+        _get_client().broadcast_text(body.text)
         return {"ok": True}
     except Exception as e:
         log.exception("broadcast error: %s", e)
