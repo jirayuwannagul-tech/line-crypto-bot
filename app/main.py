@@ -72,7 +72,10 @@ def index():
             "/chat (POST)",
             "/line/webhook (POST)",
             "/line/broadcast (POST)",        # ✅ เพิ่มตัวนี้
-            "/line/debug/push_news (POST)",
+            "/line/debug/push_news (POST)
+from app.routers.line_push import bp as line_push_bp
+app.register_blueprint(line_push_bp)
+",
             "/analyze/sample",
             "/jobs/cron-test",
             "/jobs/tick",

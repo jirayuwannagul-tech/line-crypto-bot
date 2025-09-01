@@ -37,14 +37,16 @@ def _env(name: str, default: Optional[str] = None) -> Optional[str]:
 CHANNEL_ACCESS_TOKEN = _env("LINE_CHANNEL_ACCESS_TOKEN")
 CHANNEL_SECRET = _env("LINE_CHANNEL_SECRET")
 
-_client: Optional[LineDelivery] = None
-def _client() -> LineDelivery:
-    global _client
-    if _client is None:
+_client_singleton: Optional[LineDelivery] = None
+def _get_get_client() -> LineDelivery:
+    global _client_singleton, CHANNEL_ACCESS_TOKEN, CHANNEL_SECRET
+    CHANNEL_ACCESS_TOKEN = _env('LINE_CHANNEL_ACCESS_TOKEN')
+    CHANNEL_SECRET = _env('LINE_CHANNEL_SECRET')
+    if _client_singleton is None:
         if not CHANNEL_ACCESS_TOKEN or not CHANNEL_SECRET:
             raise HTTPException(status_code=400, detail="LINE credentials missing in ENV.")
-        _client = LineDelivery(CHANNEL_ACCESS_TOKEN, CHANNEL_SECRET)
-    return _client
+        _client_singleton = LineDelivery(CHANNEL_ACCESS_TOKEN, CHANNEL_SECRET)
+    return _client_singleton
 
 # =============================================================================
 # LAYER C) SCHEMAS
@@ -67,7 +69,7 @@ def line_health() -> Dict[str, Any]:
     Ping health — ตรวจสอบว่าสามารถสร้าง client ได้
     """
     try:
-        _client()  # สร้าง / ตรวจสอบ ENV
+        _get_client()  # สร้าง / ตรวจสอบ ENV
         return {"ok": True, "client": "ready"}
     except HTTPException as e:
         raise e
@@ -82,8 +84,8 @@ def line_push(body: PushBody) -> Dict[str, Any]:
     ใช้สำหรับแจ้งเตือนจาก jobs หรือ admin tool
     """
     try:
-        client = _client()
-        client = client() if callable(client) else client
+        client = _get_client()
+        pass  # no callable wrapper needed
         client.push_text(body.to, body.text)
         return {"ok": True}
     except Exception as e:
@@ -96,7 +98,7 @@ def line_broadcast(body: BroadcastBody) -> Dict[str, Any]:
     กระจายข้อความไปยังผู้ติดตามทั้งหมด (ระวัง quota จาก LINE)
     """
     try:
-        _client().broadcast_text(body.text)
+        _get_client().broadcast_text(body.text)
         return {"ok": True}
     except Exception as e:
         log.exception("broadcast error: %s", e)
